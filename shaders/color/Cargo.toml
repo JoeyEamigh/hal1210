@@ -1,0 +1,11 @@
+[package]
+name = "color"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["dylib"]
+
+[dependencies]
+glam = { version = "0.30.7", default-features = false }
+spirv-std = { git = "https://github.com/Rust-GPU/rust-gpu", rev = "808974a0d0a57322df88d87ea05ea29ada565b0d", package = "spirv-std" }
