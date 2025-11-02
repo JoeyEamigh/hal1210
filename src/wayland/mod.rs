@@ -3,17 +3,16 @@ use std::{
   os::fd::{AsFd, OwnedFd},
 };
 
-use calloop::{channel, LoopHandle};
+use calloop::{LoopHandle, channel};
 use calloop_wayland_source::WaylandSource;
 use wayland_client::{
-  delegate_noop, event_created_child,
+  Connection, Dispatch, Proxy, QueueHandle, delegate_noop, event_created_child,
   protocol::{
     wl_buffer::WlBuffer,
     wl_output::WlOutput,
     wl_registry::{self, WlRegistry},
     wl_seat::WlSeat,
   },
-  Connection, Dispatch, Proxy, QueueHandle,
 };
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
   zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
@@ -34,18 +33,21 @@ pub type EventRx = tokio::sync::mpsc::UnboundedReceiver<Event>;
 
 #[derive(Debug)]
 pub enum Command {
-  CopyReady,
+  ComputeDone,
 }
 
 #[derive(Debug)]
 pub enum Event {
-  DmabufCreated(OwnedFd),
+  DmabufCreated {
+    fd: OwnedFd,
+    width: u32,
+    height: u32,
+    stride: u32,
+    format: u32,
+    modifier: u64,
+  },
   FrameReady,
 }
-
-// pub struct Buffer {
-//   pub
-// }
 
 pub struct Wayland {
   tx: EventTx,
@@ -108,7 +110,8 @@ impl Wayland {
     tracing::trace!("handling wayland command: {:?}", cmd);
 
     match cmd {
-      Command::CopyReady => {
+      Command::ComputeDone => {
+        tracing::debug!("shader compute done; requesting next frame");
         self.request_screencopy_frame();
       }
     };
@@ -459,13 +462,17 @@ impl Wayland {
       }
     };
 
-    if let Err(err) = self.tx.send(Event::DmabufCreated(
-      bo_fd.try_clone().expect("failed to clone gbm buffer object fd"),
-    )) {
+    let bo_modifier: u64 = bo.modifier().into();
+    if let Err(err) = self.tx.send(Event::DmabufCreated {
+      fd: bo_fd.try_clone().expect("failed to clone gbm buffer object fd"),
+      width,
+      height,
+      stride: bo.stride(),
+      format,
+      modifier: bo_modifier,
+    }) {
       tracing::error!("failed to send dmabuf created event: {}", err);
     }
-
-    let bo_modifier: u64 = bo.modifier().into();
     tracing::trace!("requesting dmabuf buffer creation");
     let params = dmabuf.create_params(qh, ());
     params.add(

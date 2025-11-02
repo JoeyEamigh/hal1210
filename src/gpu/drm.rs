@@ -5,8 +5,6 @@ use std::{
 
 use drm::node::DrmNode;
 
-// https://docs.rs/drm/latest/drm/trait.Device.html#example
-
 #[derive(Debug)]
 pub struct Device(File);
 
