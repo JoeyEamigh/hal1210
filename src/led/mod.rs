@@ -1,15 +1,17 @@
 use tokio_util::sync::CancellationToken;
 
-use crate::gpu;
-
 pub type CommandTx = tokio::sync::mpsc::UnboundedSender<Command>;
 pub type CommandRx = tokio::sync::mpsc::UnboundedReceiver<Command>;
 pub type EventTx = tokio::sync::mpsc::UnboundedSender<Event>;
 pub type EventRx = tokio::sync::mpsc::UnboundedReceiver<Event>;
 
+mod mystic;
+
+pub type LedStripState = [[u8; 3]; 160];
+
 #[derive(Debug)]
 pub enum Command {
-  HandleColors(gpu::ComputeOutput),
+  SetStripState(LedStripState),
 }
 
 #[derive(Debug)]
@@ -31,7 +33,7 @@ impl LedManager {
   }
 
   #[tracing::instrument(skip_all)]
-  fn handle_frame(&mut self, colors: gpu::ComputeOutput) {
+  fn set_strip_state(&mut self, state: LedStripState) {
     tracing::debug!("LED manager received compute output");
   }
 
@@ -44,7 +46,7 @@ impl LedManager {
           tracing::trace!("handling LED command: {:?}", cmd);
 
           match cmd {
-            Command::HandleColors(colors) => self.handle_frame(colors),
+            Command::SetStripState(state) => self.set_strip_state(state),
           }
         }
         _ = self.cancel.cancelled() => {

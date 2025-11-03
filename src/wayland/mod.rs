@@ -37,15 +37,18 @@ pub enum Command {
 }
 
 #[derive(Debug)]
+pub struct Dmabuf {
+  pub fd: OwnedFd,
+  pub width: u32,
+  pub height: u32,
+  pub stride: u32,
+  pub format: u32,
+  pub modifier: u64,
+}
+
+#[derive(Debug)]
 pub enum Event {
-  DmabufCreated {
-    fd: OwnedFd,
-    width: u32,
-    height: u32,
-    stride: u32,
-    format: u32,
-    modifier: u64,
-  },
+  DmabufCreated(Dmabuf),
   FrameReady,
 }
 
@@ -463,14 +466,14 @@ impl Wayland {
     };
 
     let bo_modifier: u64 = bo.modifier().into();
-    if let Err(err) = self.tx.send(Event::DmabufCreated {
+    if let Err(err) = self.tx.send(Event::DmabufCreated(Dmabuf {
       fd: bo_fd.try_clone().expect("failed to clone gbm buffer object fd"),
       width,
       height,
       stride: bo.stride(),
       format,
       modifier: bo_modifier,
-    }) {
+    })) {
       tracing::error!("failed to send dmabuf created event: {}", err);
     }
     tracing::trace!("requesting dmabuf buffer creation");

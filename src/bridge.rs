@@ -41,24 +41,10 @@ impl Handler {
 
   async fn handle_wayland_event(&mut self, event: wayland::Event) {
     match event {
-      wayland::Event::DmabufCreated {
-        fd,
-        width,
-        height,
-        stride,
-        format,
-        modifier,
-      } => {
+      wayland::Event::DmabufCreated(dmabuf) => {
         tracing::info!("setting DMA-BUF in compute module");
-        let dmabuf = gpu::Dmabuf {
-          fd,
-          width,
-          height,
-          stride,
-          format,
-          modifier,
-        };
-        if let Err(err) = self.compute.set_dmabuf(dmabuf) {
+
+        if let Err(err) = self.compute.set_screen_dmabuf(dmabuf) {
           tracing::error!("failed to set DMA-BUF: {}", err);
         }
       }
@@ -136,7 +122,7 @@ async fn await_compute_dispatch(
 ) {
   match compute_rx.await {
     Ok(result) => {
-      tracing::debug!("compute shader finished successfully");
+      tracing::debug!("compute shader finished successfully: {result:?}");
 
       if let Some([r, g, b]) = result.average_rgb_u8() {
         tracing::trace!(r, g, b, "computed average color");
@@ -144,9 +130,10 @@ async fn await_compute_dispatch(
         tracing::warn!("compute result contained no pixels");
       }
 
-      if let Err(err) = led_tx.send(led::Command::HandleColors(result)) {
-        tracing::error!("failed to send compute result to LED manager: {}", err);
-      }
+      // if let Err(err) = led_tx.send(led::Command::SetStripState(result)) {
+      //   tracing::error!("failed to send compute result to LED manager: {}", err);
+      // }
+
       if let Err(err) = wayland_tx.send(wayland::Command::ComputeDone) {
         tracing::error!("failed to send compute done command: {}", err);
       }
