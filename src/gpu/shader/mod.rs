@@ -1,5 +1,5 @@
 use super::ComputeError;
-use ash::{vk, Device};
+use ash::{Device, vk};
 
 pub mod border_colors;
 

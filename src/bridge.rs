@@ -42,7 +42,7 @@ impl Handler {
   async fn handle_wayland_event(&mut self, event: wayland::Event) {
     match event {
       wayland::Event::DmabufCreated(dmabuf) => {
-        tracing::info!("setting DMA-BUF in compute module");
+        tracing::debug!("setting DMA-BUF in compute module");
 
         if let Err(err) = self.compute.set_screen_dmabuf(dmabuf) {
           tracing::error!("failed to set DMA-BUF: {}", err);
@@ -124,8 +124,11 @@ async fn await_compute_dispatch(
     Ok(result) => {
       tracing::debug!("compute shader finished successfully: {result:?}");
 
-      if let Some([r, g, b]) = result.average_rgb_u8() {
-        tracing::trace!(r, g, b, "computed average color");
+      if let Some(color) = result.average_rgb_u8() {
+        tracing::trace!(r = color[0], g = color[1], b = color[2], "computed average color");
+        if let Err(err) = led_tx.send(led::Command::SetStaticColor(color)) {
+          tracing::error!("failed to send compute result to LED manager: {}", err);
+        }
       } else {
         tracing::warn!("compute result contained no pixels");
       }

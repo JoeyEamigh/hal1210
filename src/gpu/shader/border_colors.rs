@@ -1,7 +1,7 @@
 use std::{ffi::CString, io::Cursor, ptr};
 
 use crate::gpu::ComputeError;
-use ash::{util::read_spv, vk, Device};
+use ash::{Device, util::read_spv, vk};
 
 use super::{DispatchConfig, ImageInfo, ShaderResult};
 

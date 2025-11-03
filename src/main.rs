@@ -36,7 +36,9 @@ async fn main() {
   );
   let handler_handle = handler.spawn();
 
-  let led_man = led::LedManager::new(led_event_tx, led_cmd_rx, cancel_token);
+  let led_man = led::LedManager::init(led_event_tx, led_cmd_rx, cancel_token)
+    .await
+    .expect("could not initialize LED manager");
   let led_man_handle = led_man.spawn();
 
   tracing::info!("starting main loop");

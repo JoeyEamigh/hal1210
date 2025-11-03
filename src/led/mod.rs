@@ -1,3 +1,4 @@
+use mystic::MysticDevice;
 use tokio_util::sync::CancellationToken;
 
 pub type CommandTx = tokio::sync::mpsc::UnboundedSender<Command>;
@@ -9,8 +10,10 @@ mod mystic;
 
 pub type LedStripState = [[u8; 3]; 160];
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum Command {
+  SetStaticColor([u8; 3]),
   SetStripState(LedStripState),
 }
 
@@ -25,28 +28,37 @@ pub struct LedManager {
   rx: CommandRx,
 
   cancel: CancellationToken,
+  mystic: MysticDevice,
 }
 
 impl LedManager {
-  pub fn new(tx: EventTx, rx: CommandRx, cancel: CancellationToken) -> Self {
-    Self { tx, rx, cancel }
+  pub async fn init(tx: EventTx, rx: CommandRx, cancel: CancellationToken) -> Result<Self, LedError> {
+    let mystic = mystic::MysticDevice::connect().await?;
+    Ok(Self { tx, rx, cancel, mystic })
   }
 
-  #[tracing::instrument(skip_all)]
-  fn set_strip_state(&mut self, state: LedStripState) {
-    tracing::debug!("LED manager received compute output");
-  }
-
-  async fn run(&mut self) {
+  async fn run(mut self) {
     tracing::info!("starting LED manager run loop");
 
     loop {
       tokio::select! {
-        Some(cmd) = self.rx.recv() => {
-          tracing::trace!("handling LED command: {:?}", cmd);
-
+        cmd = self.rx.recv() => {
           match cmd {
-            Command::SetStripState(state) => self.set_strip_state(state),
+            Some(command) => {
+              if let Err(err) = self.mystic.handle_command(command).await {
+                tracing::error!("failed to handle LED command with Mystic: {}", err);
+
+                if let Err(send_err) = self.tx.send(Event::Error(LedError::Mystic(err))) {
+                  tracing::error!("failed to propagate Mystic run error: {}", send_err);
+                }
+              } else if let Err(send_err) = self.tx.send(Event::Done) {
+                tracing::error!("failed to send LED done event: {}", send_err);
+              }
+            }
+            None => {
+              tracing::debug!("LED command channel closed; exiting run loop");
+              break;
+            }
           }
         }
         _ = self.cancel.cancelled() => {
@@ -57,13 +69,13 @@ impl LedManager {
     }
   }
 
-  pub fn spawn(mut self) -> tokio::task::JoinHandle<()> {
+  pub fn spawn(self) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move { self.run().await })
   }
 }
 
 #[derive(thiserror::Error, Debug)]
 pub enum LedError {
-  #[error("LED error: {0}")]
-  Generic(String),
+  #[error("Mystic controller error: {0}")]
+  Mystic(#[from] mystic::MysticError),
 }
