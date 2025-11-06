@@ -1,0 +1,55 @@
+{
+    "version": 1,
+    "editor": "wokwi",
+    "author": "Joey Eamigh <55670930+JoeyEamigh@users.noreply.github.com>",
+    "parts": [
+        {
+            "type": "board-esp32-c6-devkitc-1",
+            "id": "esp",
+            "top": 40,
+            "left": 448,
+            "rotate": 90,
+            "attrs": {
+                "flashSize": "16",
+                "serialInterface": "USB_SERIAL_JTAG"
+            }
+        },
+        {
+            "type": "wokwi-neopixel-matrix",
+            "id": "strip",
+            "top": 260,
+            "left": 0,
+            "attrs": {
+                "rows": "4",
+                "cols": "40",
+                "matrixBrightness": "255",
+                "pixelate": "square",
+                "animation": "true"
+            }
+        }
+    ],
+    "connections": [
+        [
+            "strip:DIN",
+            "esp:18",
+            "",
+            []
+        ],
+        [
+            "strip:VDD",
+            "esp:5V",
+            "",
+            []
+        ],
+        [
+            "strip:VSS",
+            "esp:GND",
+            "",
+            []
+        ]
+    ],
+    "serialMonitor": {
+        "display": "terminal",
+        "convertEol": true
+    }
+}

@@ -8,7 +8,7 @@ pub type EventRx = tokio::sync::mpsc::UnboundedReceiver<Event>;
 
 mod mystic;
 
-pub type LedStripState = [[u8; 3]; 160];
+pub type LedStripState = ledcomm::StateFrame;
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]

@@ -1,0 +1,24 @@
+{
+	"folders": [
+		{
+			"path": "espled"
+		},
+		{
+			"path": "ledcomm"
+		},
+		{
+			"path": "wayled"
+		},
+		{
+			"path": ".",
+			"name": "root"
+		}
+	],
+	"settings": {
+		"files.exclude": {
+			"espled": true,
+			"ledcomm": true,
+			"wayled": true
+		}
+	}
+}
