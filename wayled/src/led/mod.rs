@@ -1,4 +1,3 @@
-use mystic::MysticDevice;
 use tokio_util::sync::CancellationToken;
 
 pub type CommandTx = tokio::sync::mpsc::UnboundedSender<Command>;
@@ -6,7 +5,7 @@ pub type CommandRx = tokio::sync::mpsc::UnboundedReceiver<Command>;
 pub type EventTx = tokio::sync::mpsc::UnboundedSender<Event>;
 pub type EventRx = tokio::sync::mpsc::UnboundedReceiver<Event>;
 
-mod mystic;
+mod esp32;
 
 pub type LedStripState = ledcomm::StateFrame;
 
@@ -28,13 +27,13 @@ pub struct LedManager {
   rx: CommandRx,
 
   cancel: CancellationToken,
-  mystic: MysticDevice,
+  device: esp32::Esp32Device,
 }
 
 impl LedManager {
   pub async fn init(tx: EventTx, rx: CommandRx, cancel: CancellationToken) -> Result<Self, LedError> {
-    let mystic = mystic::MysticDevice::connect().await?;
-    Ok(Self { tx, rx, cancel, mystic })
+    let device = esp32::Esp32Device::connect(cancel.child_token()).await?;
+    Ok(Self { tx, rx, cancel, device })
   }
 
   async fn run(mut self) {
@@ -45,11 +44,12 @@ impl LedManager {
         cmd = self.rx.recv() => {
           match cmd {
             Some(command) => {
-              if let Err(err) = self.mystic.handle_command(command).await {
-                tracing::error!("failed to handle LED command with Mystic: {}", err);
+              tracing::trace!(?command, "LED manager received command");
+              if let Err(err) = self.device.handle_command(command).await {
+                tracing::error!("failed to handle LED command for ESP32: {}", err);
 
-                if let Err(send_err) = self.tx.send(Event::Error(LedError::Mystic(err))) {
-                  tracing::error!("failed to propagate Mystic run error: {}", send_err);
+                if let Err(send_err) = self.tx.send(Event::Error(LedError::Esp32(err))) {
+                  tracing::error!("failed to propagate LED error: {}", send_err);
                 }
               } else if let Err(send_err) = self.tx.send(Event::Done) {
                 tracing::error!("failed to send LED done event: {}", send_err);
@@ -67,6 +67,13 @@ impl LedManager {
         }
       }
     }
+
+    tracing::info!("LED manager run loop exited, closing serial port...");
+    self.device.close().await.unwrap_or_else(|err| {
+      tracing::error!("failed to close ESP32 serial port: {}", err);
+    });
+
+    tracing::info!("LED manager shut down");
   }
 
   pub fn spawn(self) -> tokio::task::JoinHandle<()> {
@@ -76,6 +83,6 @@ impl LedManager {
 
 #[derive(thiserror::Error, Debug)]
 pub enum LedError {
-  #[error("Mystic controller error: {0}")]
-  Mystic(#[from] mystic::MysticError),
+  #[error("ESP32 device error: {0}")]
+  Esp32(#[from] esp32::Esp32Error),
 }

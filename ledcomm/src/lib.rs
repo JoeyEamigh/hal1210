@@ -25,6 +25,16 @@ pub struct Frame {
   pub data: StateFrame,
 }
 
+impl Frame {
+  pub fn new(magic: [u8; MAGIC_LEN], len: u16) -> Self {
+    Self {
+      magic,
+      len,
+      ..Default::default()
+    }
+  }
+}
+
 impl Default for Frame {
   fn default() -> Self {
     Self {

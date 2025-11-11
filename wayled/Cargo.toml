@@ -8,6 +8,8 @@ members = [".", "shaders/*"]
 resolver = "3"
 
 [dependencies]
+ledcomm = { path = "../ledcomm" }
+
 ash = "0.38.0"
 calloop = { version = "0.14.3", features = ["executor", "futures-io"] }
 calloop-wayland-source = "0.4.1"
@@ -31,11 +33,10 @@ async-hid = { version = "0.4.4", default-features = false, features = [
     "tokio",
 ] }
 libc = "0.2.177"
-
-ledcomm = { path = "../ledcomm" }
-
-[dev-dependencies]
-serialport = "4.6.1"
+tokio-serial = "5.4.5"
 
 [build-dependencies]
 spirv-builder = { git = "https://github.com/Rust-GPU/rust-gpu", rev = "808974a0d0a57322df88d87ea05ea29ada565b0d", package = "spirv-builder" }
+
+[dev-dependencies]
+serialport = "4.6.1"
