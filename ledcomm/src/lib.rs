@@ -10,7 +10,7 @@ pub const MAGIC_LEN: usize = MAGIC.len();
 pub const LEN_LEN: usize = 2;
 pub const HEADER_LEN: usize = MAGIC_LEN + LEN_LEN;
 pub const BYTES_PER_LED: usize = 3;
-pub const NUM_LEDS: usize = 160 * 4 + 18; // 160 LEDs per meter, 4 meters, 18 i guess were stuck on there?
+pub const NUM_LEDS: usize = 60 * 5; // 60 LEDs per meter, 5 meters
 pub const STATE_BYTES: usize = NUM_LEDS * BYTES_PER_LED;
 pub const FRAME_LEN: usize = HEADER_LEN + STATE_BYTES;
 

@@ -6,50 +6,41 @@
         {
             "type": "board-esp32-c6-devkitc-1",
             "id": "esp",
-            "top": 40,
-            "left": 448,
-            "rotate": 90,
+            "top": 300,
+            "left": 190,
+            "rotate": -90,
             "attrs": {
                 "flashSize": "16",
                 "serialInterface": "USB_SERIAL_JTAG"
             }
         },
         {
-            "type": "wokwi-neopixel-matrix",
+            "type": "wokwi-apa102-matrix",
             "id": "strip",
-            "top": 260,
+            "top": 0,
             "left": 0,
             "attrs": {
-                "rows": "4",
-                "cols": "40",
-                "matrixBrightness": "255",
-                "pixelate": "square",
-                "animation": "true"
+                "rows": "15",
+                "cols": "20"
             }
         }
     ],
     "connections": [
         [
-            "strip:DIN",
             "esp:18",
-            "",
-            []
+            "strip:DI",
+            "green",
+            [
+                "v0"
+            ]
         ],
         [
-            "strip:VDD",
-            "esp:5V",
-            "",
-            []
-        ],
-        [
-            "strip:VSS",
-            "esp:GND",
-            "",
-            []
+            "esp:19",
+            "strip:CI",
+            "white",
+            [
+                "v0"
+            ]
         ]
-    ],
-    "serialMonitor": {
-        "display": "terminal",
-        "convertEol": true
-    }
+    ]
 }

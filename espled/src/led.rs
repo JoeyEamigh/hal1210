@@ -1,43 +1,59 @@
-use esp_idf_svc::hal::{gpio::Gpio18, rmt, sys::esp_random};
+use apa102_spi::{Apa102Pixel, Apa102WriterAsync, PixelOrder, SmartLedsWriteAsync};
+use esp_idf_svc::hal::{spi, sys::esp_random};
 use ledcomm::NUM_LEDS;
 use log::*;
 use smart_leds::{
   hsv::{hsv2rgb, Hsv},
-  SmartLedsWrite, RGB8,
+  RGB8,
 };
-use ws2812_esp32_rmt_driver::Ws2812Esp32Rmt;
 
 use crate::usb::StateFrameReceiver;
+
+type SpiBus = spi::SpiBusDriver<'static, spi::SpiDriver<'static>>;
+
+pub const SK9822_FRAME_BYTES: usize = NUM_LEDS * 4 + START_END_BYTES + END_FRAME_BYTES;
+const START_END_BYTES: usize = 8;
+const END_FRAME_BYTES: usize = NUM_LEDS.div_ceil(16);
+pub const SPI_DMA_TRANSFER_BYTES: usize = align4(SK9822_FRAME_BYTES);
+
+const fn align4(n: usize) -> usize {
+  (n + 3) & !3
+}
+
+pub type LedError = spi::SpiError;
 
 // Receiver task: consumes full frames from the channel and processes them.
 #[embassy_executor::task]
 pub async fn frame_rx(mut driver: LedDriver, rx: StateFrameReceiver) {
-  driver.rainbow().await;
+  debug!("frame_rx: starting task");
+  // driver.rainbow().await;
 
   loop {
     let frame = rx.receive().await;
+    trace!("frame_rx: received frame with len {}", frame.len());
 
-    if let Err(err) = driver.write(frame) {
+    let pixels = frame.into_iter().map(|[r, g, b]| RGB8 { r, g, b });
+    if let Err(err) = driver.write(pixels).await {
       error!("frame_rx: failed to write to LEDs: {:?}", err);
     }
   }
 }
 
-pub struct LedDriver(Ws2812Esp32Rmt<'static>);
+pub struct LedDriver(Apa102WriterAsync<SpiBus>);
 
 impl LedDriver {
-  pub fn new(led_pin: Gpio18, rmt_channel: rmt::CHANNEL0) -> Self {
-    let ws2812 = Ws2812Esp32Rmt::new(rmt_channel, led_pin).expect("failed to create WS2812 driver");
-    LedDriver(ws2812)
+  pub fn new(spi_bus: SpiBus) -> Self {
+    let writer = Apa102WriterAsync::new(spi_bus, NUM_LEDS, PixelOrder::BGR);
+    LedDriver(writer)
   }
 
-  pub fn write<T, I>(&mut self, pixels: T) -> Result<(), ws2812_esp32_rmt_driver::driver::Ws2812Esp32RmtDriverError>
+  pub async fn write<T>(&mut self, pixels: T) -> Result<(), LedError>
   where
-    T: IntoIterator<Item = I>,
-    I: Into<RGB8>,
+    T: IntoIterator<Item = RGB8>,
   {
     trace!("Writing {NUM_LEDS} pixels to LED strip");
-    self.0.write(pixels)
+    let mapped = pixels.into_iter().map(Apa102Pixel::from);
+    self.0.write(mapped).await
   }
 
   #[allow(dead_code)]
@@ -52,14 +68,18 @@ impl LedDriver {
         let rgb = hsv2rgb(Hsv {
           hue: pixel_hue,
           sat: 255,
-          val: 20,
+          val: 255,
         });
 
-        [rgb.r, rgb.g, rgb.b]
+        RGB8 {
+          r: rgb.r,
+          g: rgb.g,
+          b: rgb.b,
+        }
       });
       debug!("Writing rainbow frame with hue {}; len {}", hue, pixels.len());
 
-      self.write(pixels).expect("failed to write to LEDs");
+      self.write(pixels).await.expect("failed to write to LEDs");
 
       embassy_time::Timer::after_millis(100).await;
 

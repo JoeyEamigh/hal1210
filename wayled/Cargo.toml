@@ -34,5 +34,8 @@ libc = "0.2.177"
 
 ledcomm = { path = "../ledcomm" }
 
+[dev-dependencies]
+serialport = "4.6.1"
+
 [build-dependencies]
 spirv-builder = { git = "https://github.com/Rust-GPU/rust-gpu", rev = "808974a0d0a57322df88d87ea05ea29ada565b0d", package = "spirv-builder" }

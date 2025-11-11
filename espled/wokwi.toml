@@ -3,3 +3,4 @@ version = 1
 gdbServerPort = 3333
 elf = "target/riscv32imac-esp-espidf/debug/espled"
 firmware = "target/riscv32imac-esp-espidf/debug/espled"
+rfc2217ServerPort = 4000
