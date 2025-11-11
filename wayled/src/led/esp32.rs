@@ -272,7 +272,7 @@ mod test {
       .expect("failed to send static color");
 
     // sleep for a bit to allow any RX logging to occur
-    tokio::time::sleep(Duration::from_secs(10)).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     cancel.cancel();
     port.tx.shutdown().await.expect("shutdown failed");
