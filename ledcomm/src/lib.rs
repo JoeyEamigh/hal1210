@@ -1,8 +1,9 @@
 #![no_std]
 
 use core::{
-  fmt,
+  fmt, mem,
   ops::{Deref, DerefMut},
+  ptr,
 };
 
 pub const MAGIC: [u8; 4] = *b"LEDS";
@@ -13,6 +14,8 @@ pub const BYTES_PER_LED: usize = 3;
 pub const NUM_LEDS: usize = 60 * 5; // 60 LEDs per meter, 5 meters
 pub const STATE_BYTES: usize = NUM_LEDS * BYTES_PER_LED;
 pub const FRAME_LEN: usize = HEADER_LEN + STATE_BYTES;
+pub const FEEDBACK_MAGIC: [u8; 4] = *b"LEDF";
+pub const FEEDBACK_MAGIC_LEN: usize = FEEDBACK_MAGIC.len();
 
 pub type Pixel = [u8; BYTES_PER_LED];
 pub type StateFrame = [Pixel; NUM_LEDS];
@@ -236,4 +239,91 @@ pub fn zero_state_frame() -> StateFrame {
 pub fn clamp_payload_len(len: usize) -> usize {
   let capped = len.min(STATE_BYTES);
   capped - (capped % BYTES_PER_LED)
+}
+
+pub const WRITE_FEEDBACK_LEN: usize = mem::size_of::<WriteFeedback>();
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WriteFeedback {
+  pub magic: [u8; FEEDBACK_MAGIC_LEN],
+  pub ingest_us: u32,
+  pub copy_us: u32,
+  pub spi_us: u32,
+  pub total_us: u32,
+  pub frame_bytes: u16,
+  reserved: u16,
+}
+
+impl WriteFeedback {
+  #[inline]
+  pub const fn new(ingest_us: u32, copy_us: u32, spi_us: u32, total_us: u32, frame_bytes: usize) -> Self {
+    let frame_bytes = if frame_bytes > u16::MAX as usize {
+      u16::MAX
+    } else {
+      frame_bytes as u16
+    };
+    Self {
+      magic: FEEDBACK_MAGIC,
+      ingest_us,
+      copy_us,
+      spi_us,
+      total_us,
+      frame_bytes,
+      reserved: 0,
+    }
+  }
+
+  #[inline]
+  pub fn as_bytes(&self) -> &[u8; WRITE_FEEDBACK_LEN] {
+    unsafe { &*(self as *const Self as *const [u8; WRITE_FEEDBACK_LEN]) }
+  }
+
+  #[inline]
+  pub fn to_bytes(&self) -> [u8; WRITE_FEEDBACK_LEN] {
+    let mut bytes = [0u8; WRITE_FEEDBACK_LEN];
+    unsafe {
+      ptr::copy_nonoverlapping(self as *const Self as *const u8, bytes.as_mut_ptr(), WRITE_FEEDBACK_LEN);
+    }
+    bytes
+  }
+
+  #[inline]
+  pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+    if bytes.len() != WRITE_FEEDBACK_LEN {
+      return None;
+    }
+    let mut tmp = [0u8; WRITE_FEEDBACK_LEN];
+    tmp.copy_from_slice(bytes);
+    let feedback = unsafe { ptr::read_unaligned(tmp.as_ptr() as *const Self) };
+    (feedback.magic == FEEDBACK_MAGIC).then_some(feedback)
+  }
+
+  #[inline]
+  pub const fn frame_len(&self) -> usize {
+    self.frame_bytes as usize
+  }
+}
+
+#[inline]
+pub fn parse_write_feedback(buf: &[u8]) -> Option<(WriteFeedback, usize)> {
+  if buf.len() < FEEDBACK_MAGIC_LEN {
+    return None;
+  }
+
+  for (offset, window) in buf.windows(FEEDBACK_MAGIC_LEN).enumerate() {
+    if window == FEEDBACK_MAGIC {
+      let end = offset + WRITE_FEEDBACK_LEN;
+      if end > buf.len() {
+        return None;
+      }
+
+      let slice = &buf[offset..end];
+      if let Some(feedback) = WriteFeedback::from_bytes(slice) {
+        return Some((feedback, end));
+      }
+    }
+  }
+
+  None
 }

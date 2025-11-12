@@ -1,37 +1,16 @@
-use std::{env, fmt::Write as _, path::PathBuf, time::Duration};
+use std::{env, path::PathBuf, time::Duration};
 
-use ledcomm::{BYTES_PER_LED, NUM_LEDS};
-use tokio::{
-  io::{self, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf},
-  time::timeout,
-};
-use tokio_serial::{SerialPortBuilderExt, SerialPortInfo, SerialPortType, SerialStream, UsbPortInfo};
+use ledcomm::{parse_write_feedback, BYTES_PER_LED, NUM_LEDS, WRITE_FEEDBACK_LEN};
+use tokio::io::{self, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
+use tokio_serial::{SerialPortBuilderExt, SerialPortType, SerialStream, UsbPortInfo};
 use tokio_util::sync::CancellationToken;
 
-use super::LedStripState;
+use super::{Event, EventTx, LedStripState};
 
 const DEFAULT_BAUD: u32 = 5_000_000;
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(100);
 const ENV_PORT: &str = "WAYLED_ESP32_PORT";
 const RX_BUFFER_LEN: usize = 512;
-
-#[derive(thiserror::Error, Debug)]
-pub enum Esp32Error {
-  #[error("no ESP32 serial devices were found; set {ENV_PORT} to override")]
-  NotFound,
-  #[error("failed to enumerate serial ports: {0}")]
-  Enumeration(#[from] tokio_serial::Error),
-  #[error("failed to open serial port {path}: {source}")]
-  Open {
-    path: PathBuf,
-    #[source]
-    source: tokio_serial::Error,
-  },
-  #[error("serial write failed: {0}")]
-  Write(#[from] std::io::Error),
-  #[error("serial operation timed out")]
-  Timeout,
-}
 
 pub struct Esp32Device {
   tx: WriteHalf<SerialStream>,
@@ -39,7 +18,7 @@ pub struct Esp32Device {
 }
 
 impl Esp32Device {
-  pub async fn connect(cancel: CancellationToken) -> Result<Self, Esp32Error> {
+  pub async fn connect(event_tx: EventTx, cancel: CancellationToken) -> Result<Self, Esp32Error> {
     let port_path = resolve_port()?;
     let port_string = port_path.to_string_lossy().into_owned();
 
@@ -56,15 +35,11 @@ impl Esp32Device {
     })?;
 
     let (reader, writer) = tokio::io::split(stream);
-    spawn_rx_logger(reader, cancel);
+    spawn_feedback_listener(reader, cancel, event_tx);
 
     let frame = ledcomm::Frame::new(ledcomm::MAGIC, (NUM_LEDS * BYTES_PER_LED) as u16);
 
-    tracing::info!(
-      path = %port_path.display(),
-      baud = DEFAULT_BAUD,
-      "connected to ESP32 LED controller"
-    );
+    tracing::info!("connected to ESP32 LED controller: {port_path:?} at {DEFAULT_BAUD} baud");
 
     Ok(Self { tx: writer, frame })
   }
@@ -104,14 +79,12 @@ impl Esp32Device {
     self.write_frame().await
   }
 
+  #[tracing::instrument(level = "trace", skip_all)]
   async fn write_frame(&mut self) -> Result<(), Esp32Error> {
     let packet = self.frame.packet();
-    tracing::debug!(bytes = packet.len(), "ESP32 serial write");
-    tracing::trace!(preview = %hex_preview(packet), "ESP32 serial write preview");
-    timeout(Duration::from_secs(5), self.tx.write_all(packet))
-      .await
-      .map_err(|_| Esp32Error::Timeout)??;
-    // ! DO NOT FLUSH THE SERIAL PORT! SHIT WILL DIE!
+    tracing::trace!("ESP32 serial write: {} bytes", packet.len());
+    self.tx.write_all(packet).await?;
+    self.tx.flush().await?;
     Ok(())
   }
 }
@@ -122,8 +95,10 @@ fn resolve_port() -> Result<PathBuf, Esp32Error> {
   }
 
   let ports = tokio_serial::available_ports()?;
-
-  let mut candidates = ports.iter().filter_map(port_candidate_path);
+  let mut candidates = ports.iter().filter_map(|info| match &info.port_type {
+    SerialPortType::UsbPort(usb) if is_esp32_usb(usb) => Some(PathBuf::from(&info.port_name)),
+    _ => None,
+  });
 
   if let Some(path) = candidates.next() {
     return Ok(path);
@@ -138,13 +113,6 @@ fn resolve_port() -> Result<PathBuf, Esp32Error> {
     .ok_or(Esp32Error::NotFound)
 }
 
-fn port_candidate_path(info: &SerialPortInfo) -> Option<PathBuf> {
-  match &info.port_type {
-    SerialPortType::UsbPort(usb) if is_esp32_usb(usb) => Some(PathBuf::from(&info.port_name)),
-    _ => None,
-  }
-}
-
 fn is_esp32_usb(usb: &UsbPortInfo) -> bool {
   if usb.vid == 0x303A || usb.vid == 0x10C4 {
     return true;
@@ -157,10 +125,10 @@ fn is_esp32_usb(usb: &UsbPortInfo) -> bool {
     .unwrap_or(false)
 }
 
-fn spawn_rx_logger(mut reader: ReadHalf<SerialStream>, cancel: CancellationToken) {
+fn spawn_feedback_listener(mut reader: ReadHalf<SerialStream>, cancel: CancellationToken, event_tx: EventTx) {
   tokio::spawn(async move {
     let mut buf = vec![0u8; RX_BUFFER_LEN];
-    let mut backlog = Vec::with_capacity(RX_BUFFER_LEN);
+    let mut backlog = Vec::with_capacity(RX_BUFFER_LEN * 2);
 
     loop {
       tokio::select! {
@@ -176,29 +144,32 @@ fn spawn_rx_logger(mut reader: ReadHalf<SerialStream>, cancel: CancellationToken
               break;
             }
             Ok(n) => {
-              let chunk = &buf[..n];
-              // tracing::trace!("ESP32 => host chunk; {n} bytes");
-              backlog.extend_from_slice(chunk);
+              backlog.extend_from_slice(&buf[..n]);
 
-              while let Some(pos) = backlog.iter().position(|&b| b == b'\n') {
-                let mut line = backlog.drain(..=pos).collect::<Vec<u8>>();
-                if let Some(b'\n') = line.last() {
-                  line.pop();
-                }
-                if let Some(b'\r') = line.last() {
-                  line.pop();
-                }
-                if line.is_empty() {
-                  continue;
-                }
-                let text = String::from_utf8_lossy(&line);
-                tracing::debug!("ESP32 => host: {text}");
-              }
+              loop {
+                match parse_write_feedback(&backlog) {
+                  Some((feedback, consumed)) => {
+                    backlog.drain(..consumed);
 
-              if backlog.len() > RX_BUFFER_LEN {
-                // let text = String::from_utf8_lossy(&backlog);
-                // tracing::debug!("ESP32 => host (partial): {text}");
-                backlog.clear();
+                    let ingest_ms = feedback.ingest_us as f32 / 1000.0;
+                    let copy_ms = feedback.copy_us as f32 / 1000.0;
+                    let spi_ms = feedback.spi_us as f32 / 1000.0;
+                    let total_ms = feedback.total_us as f32 / 1000.0;
+                    tracing::trace!("ESP32 frame complete: ingest={ingest_ms}ms copy={copy_ms}ms spi={spi_ms}ms total={total_ms}ms");
+
+                    if let Err(err) = event_tx.send(Event::Done) {
+                      tracing::warn!("ESP32 feedback listener failed to send done event: {err}");
+                      return;
+                    }
+                  }
+                  None => {
+                    if backlog.len() > WRITE_FEEDBACK_LEN * 4 {
+                      let drop = backlog.len().saturating_sub(WRITE_FEEDBACK_LEN * 2);
+                      backlog.drain(..drop);
+                    }
+                    break;
+                  }
+                }
               }
             }
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
@@ -217,18 +188,20 @@ fn spawn_rx_logger(mut reader: ReadHalf<SerialStream>, cancel: CancellationToken
   });
 }
 
-fn hex_preview(data: &[u8]) -> String {
-  let mut out = String::new();
-  for (idx, byte) in data.iter().take(16).enumerate() {
-    if idx > 0 {
-      out.push(' ');
-    }
-    let _ = write!(&mut out, "{byte:02X}");
-  }
-  if data.len() > 16 {
-    out.push_str(" …");
-  }
-  out
+#[derive(thiserror::Error, Debug)]
+pub enum Esp32Error {
+  #[error("no ESP32 serial devices were found; set {ENV_PORT} to override")]
+  NotFound,
+  #[error("failed to enumerate serial ports: {0}")]
+  Enumeration(#[from] tokio_serial::Error),
+  #[error("failed to open serial port {path}: {source}")]
+  Open {
+    path: PathBuf,
+    #[source]
+    source: tokio_serial::Error,
+  },
+  #[error("serial write failed: {0}")]
+  Write(#[from] std::io::Error),
 }
 
 #[cfg(test)]
@@ -255,7 +228,8 @@ mod test {
       .init();
 
     let cancel = CancellationToken::new();
-    let result = Esp32Device::connect(cancel.child_token()).await;
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    let result = Esp32Device::connect(event_tx, cancel.child_token()).await;
 
     let mut port = match result {
       Ok(port) => port,
@@ -270,6 +244,9 @@ mod test {
       .send_static_color(color)
       .await
       .expect("failed to send static color");
+
+    // wait for a single feedback packet to verify the loop is running
+    let _ = timeout(Duration::from_secs(1), event_rx.recv()).await;
 
     // sleep for a bit to allow any RX logging to occur
     tokio::time::sleep(Duration::from_secs(2)).await;

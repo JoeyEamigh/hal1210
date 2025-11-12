@@ -10,8 +10,7 @@
             "left": 190,
             "rotate": -90,
             "attrs": {
-                "flashSize": "16",
-                "serialInterface": "USB_SERIAL_JTAG"
+                "flashSize": "16"
             }
         },
         {
@@ -41,6 +40,22 @@
             [
                 "v0"
             ]
+        ],
+        [
+            "esp:TX",
+            "$serialMonitor:RX",
+            "",
+            []
+        ],
+        [
+            "esp:RX",
+            "$serialMonitor:TX",
+            "",
+            []
         ]
-    ]
+    ],
+    "serialMonitor": {
+        "display": "terminal",
+        "convertEol": true
+    }
 }

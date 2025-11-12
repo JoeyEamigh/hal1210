@@ -18,7 +18,8 @@
 		"files.exclude": {
 			"espled": true,
 			"ledcomm": true,
-			"wayled": true
-		}
+			"wayled": true,
+		},
+		"rust-analyzer.cargo.allTargets": false
 	}
 }

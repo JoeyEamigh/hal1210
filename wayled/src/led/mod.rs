@@ -32,7 +32,7 @@ pub struct LedManager {
 
 impl LedManager {
   pub async fn init(tx: EventTx, rx: CommandRx, cancel: CancellationToken) -> Result<Self, LedError> {
-    let device = esp32::Esp32Device::connect(cancel.child_token()).await?;
+    let device = esp32::Esp32Device::connect(tx.clone(), cancel.child_token()).await?;
     Ok(Self { tx, rx, cancel, device })
   }
 
@@ -51,8 +51,6 @@ impl LedManager {
                 if let Err(send_err) = self.tx.send(Event::Error(LedError::Esp32(err))) {
                   tracing::error!("failed to propagate LED error: {}", send_err);
                 }
-              } else if let Err(send_err) = self.tx.send(Event::Done) {
-                tracing::error!("failed to send LED done event: {}", send_err);
               }
             }
             None => {

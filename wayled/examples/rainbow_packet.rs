@@ -7,7 +7,7 @@ use std::{
   io::{self, Write},
 };
 
-use ledcomm::{Frame, BYTES_PER_LED, MAGIC, NUM_LEDS};
+use ledcomm::{BYTES_PER_LED, Frame, MAGIC, NUM_LEDS};
 
 fn main() {
   if let Err(err) = run() {

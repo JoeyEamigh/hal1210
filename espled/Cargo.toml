@@ -1,39 +1,40 @@
 [package]
-name = "espled"
-version = "0.1.0"
-authors = ["Joey Eamigh <55670930+JoeyEamigh@users.noreply.github.com>"]
 edition = "2024"
-resolver = "2"
-rust-version = "1.90"
+name = "espled"
+rust-version = "1.88"
+version = "0.1.0"
 
 [[bin]]
 name = "espled"
-harness = false # do not use the built-in cargo test harness -> resolve rust-analyzer errors
-
-[profile.release]
-opt-level = "s"
-
-[profile.dev]
-debug = true    # Symbols are nice, and they don't increase the size on Flash
-opt-level = "z"
+path = "./src/bin/main.rs"
 
 [features]
 default = []
 emulator = []
-experimental = ["esp-idf-svc/experimental"]
 
 [dependencies]
 ledcomm = { path = "../ledcomm" }
 
-log = "0.4"
-esp-idf-hal = { version = "0.45.2" }
-esp-idf-svc = { version = "0.51", features = ["critical-section", "embassy-time-driver", "embassy-sync"] }
-embassy-time = { version = "0.4.0", features = ["generic-queue-8"] }
+defmt = "1.0.1"
+esp-hal = { version = "1.0.0", features = ["defmt", "esp32c6", "unstable"] }
+esp-bootloader-esp-idf = { version = "0.4.0", features = ["defmt", "esp32c6"] }
+critical-section = "1.2.0"
+esp-alloc = { version = "0.9.0", features = ["defmt"] }
+panic-rtt-target = { version = "0.2.0", features = ["defmt"] }
+rtt-target = { version = "0.6.2", features = ["defmt"] }
 smart-leds = "0.4.0"
-embassy-executor = { version = "0.9.1", features = ["arch-std", "executor-thread", "log"] }
-embassy-sync = { version = "0.7.2", features = ["std"] }
-apa102-spi = "0.5.1"
 
 
-[build-dependencies]
-embuild = "0.33"
+[profile.dev]
+# Rust debug is too slow.
+# For debug builds always builds with some optimization
+opt-level = "s"
+
+[profile.release]
+codegen-units = 1        # LLVM can perform better optimizations using a single thread
+debug = 2
+debug-assertions = false
+incremental = false
+lto = 'fat'
+opt-level = 's'
+overflow-checks = false
