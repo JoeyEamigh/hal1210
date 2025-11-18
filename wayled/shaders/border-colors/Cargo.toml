@@ -7,5 +7,7 @@ edition = "2024"
 crate-type = ["dylib"]
 
 [dependencies]
+shadercomm = { path = "../../../shadercomm" }
+
 glam = { version = "0.30.9", default-features = false }
 spirv-std = { git = "https://github.com/Rust-GPU/rust-gpu", rev = "808974a0d0a57322df88d87ea05ea29ada565b0d", package = "spirv-std" }

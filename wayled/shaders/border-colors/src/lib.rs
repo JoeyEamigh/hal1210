@@ -9,21 +9,17 @@ use spirv_std::{
   spirv,
 };
 
+ use shadercomm::{
+  AverageBuffer
+   //SIDE_LEDS, TOP_LEDS, AverageBuffer
+ };
+
 #[repr(C)]
 pub struct DispatchParams {
   pub width: u32,
   pub height: u32,
   pub stride: u32,
   pub bytes_per_pixel: u32,
-}
-
-#[repr(C)]
-pub struct AverageBuffer {
-  pub sum_r: i64,
-  pub sum_g: i64,
-  pub sum_b: i64,
-  pub pixel_count: i64,
-  pub _padding: i64,
 }
 
 const WORKGROUP_SIZE: usize = 1024;

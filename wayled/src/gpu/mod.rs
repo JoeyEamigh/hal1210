@@ -3,21 +3,24 @@ use std::{
   os::fd::{FromRawFd, IntoRawFd, OwnedFd},
   ptr,
   sync::{
-    Arc,
     atomic::{AtomicBool, Ordering},
+    Arc,
   },
   thread,
   time::Instant,
 };
 
 use self::shader::{DispatchScratch, ImageInfo, ShaderKind, ShaderResult, Shaders};
-use ash::{Device, Entry, Instance, vk};
+use ash::{vk, Device, Entry, Instance};
 use tokio::{sync::oneshot, task::spawn_blocking};
 
 use crate::wayland;
 
 pub mod drm;
 mod shader;
+
+#[cfg(test)]
+mod test;
 
 pub type ComputeOutput = ShaderResult;
 

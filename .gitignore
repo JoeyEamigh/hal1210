@@ -3,3 +3,5 @@ reference/
 debug/
 target/
 .embuild
+.switch-user.sh
+

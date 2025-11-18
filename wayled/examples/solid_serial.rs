@@ -27,12 +27,15 @@ fn main() -> Result<(), Box<dyn Error>> {
 
   loop {
     let base_hue = hue;
-    hue = hue.wrapping_add(1);
+    hue = hue.wrapping_add(10);
 
     for (idx, pixel) in frame.data.iter_mut().enumerate() {
-      let offset = (idx as u16 % 256) as u8;
-      let pixel_hue = base_hue.wrapping_add(offset);
-      *pixel = hsv_to_rgb(pixel_hue, 255, 255);
+      if idx < 7 {
+        *pixel = [0, 0, 255];
+        continue;
+      }
+
+      *pixel = [255, 255, 0];
     }
 
     println!("writing packet with hue {base_hue}");
@@ -77,7 +80,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let elapsed = now.elapsed();
     println!("wrote {} bytes in {:?}", packet.len(), elapsed);
 
-    thread::sleep(Duration::from_millis(8));
+    thread::sleep(Duration::from_millis(1_000));
   }
 }
 

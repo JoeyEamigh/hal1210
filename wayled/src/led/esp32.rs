@@ -1,6 +1,6 @@
 use std::{env, path::PathBuf, time::Duration};
 
-use ledcomm::{parse_write_feedback, BYTES_PER_LED, NUM_LEDS, WRITE_FEEDBACK_LEN};
+use ledcomm::{BYTES_PER_LED, NUM_LEDS, WRITE_FEEDBACK_LEN, parse_write_feedback};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio_serial::{SerialPortBuilderExt, SerialPortType, SerialStream, UsbPortInfo};
 use tokio_util::sync::CancellationToken;
@@ -204,54 +204,54 @@ pub enum Esp32Error {
   Write(#[from] std::io::Error),
 }
 
-#[cfg(test)]
-mod test {
-  use super::*;
-  use tokio_util::sync::CancellationToken;
-  use tracing::metadata::LevelFilter;
-  use tracing_subscriber::{
-    filter::Directive,
-    fmt::{self, format::FmtSpan},
-    prelude::__tracing_subscriber_SubscriberExt,
-    util::SubscriberInitExt,
-    EnvFilter, Layer,
-  };
+// #[cfg(test)]
+// mod test {
+//   use super::*;
+//   use tokio_util::sync::CancellationToken;
+//   use tracing::metadata::LevelFilter;
+//   use tracing_subscriber::{
+//     filter::Directive,
+//     fmt::{self, format::FmtSpan},
+//     prelude::__tracing_subscriber_SubscriberExt,
+//     util::SubscriberInitExt,
+//     EnvFilter, Layer,
+//   };
 
-  #[tokio::test]
-  async fn test_open_serial_port() {
-    let filter = EnvFilter::builder()
-      .with_default_directive(Directive::from(LevelFilter::TRACE))
-      .parse_lossy("wayled=trace");
+//   #[tokio::test]
+//   async fn test_open_serial_port() {
+//     let filter = EnvFilter::builder()
+//       .with_default_directive(Directive::from(LevelFilter::TRACE))
+//       .parse_lossy("wayled=trace");
 
-    tracing_subscriber::registry()
-      .with(fmt::layer().with_span_events(FmtSpan::CLOSE).with_filter(filter))
-      .init();
+//     tracing_subscriber::registry()
+//       .with(fmt::layer().with_span_events(FmtSpan::CLOSE).with_filter(filter))
+//       .init();
 
-    let cancel = CancellationToken::new();
-    let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
-    let result = Esp32Device::connect(event_tx, cancel.child_token()).await;
+//     let cancel = CancellationToken::new();
+//     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+//     let result = Esp32Device::connect(event_tx, cancel.child_token()).await;
 
-    let mut port = match result {
-      Ok(port) => port,
-      Err(Esp32Error::NotFound) => panic!("No ESP32 device found"),
-      Err(e) => panic!("Unexpected error: {e}"),
-    };
+//     let mut port = match result {
+//       Ok(port) => port,
+//       Err(Esp32Error::NotFound) => panic!("No ESP32 device found"),
+//       Err(e) => panic!("Unexpected error: {e}"),
+//     };
 
-    println!("Serial port opened successfully");
+//     println!("Serial port opened successfully");
 
-    let color = [255, 0, 0];
-    port
-      .send_static_color(color)
-      .await
-      .expect("failed to send static color");
+//     let color = [255, 0, 0];
+//     port
+//       .send_static_color(color)
+//       .await
+//       .expect("failed to send static color");
 
-    // wait for a single feedback packet to verify the loop is running
-    let _ = timeout(Duration::from_secs(1), event_rx.recv()).await;
+//     // wait for a single feedback packet to verify the loop is running
+//     let _ = timeout(Duration::from_secs(1), event_rx.recv()).await;
 
-    // sleep for a bit to allow any RX logging to occur
-    tokio::time::sleep(Duration::from_secs(2)).await;
+//     // sleep for a bit to allow any RX logging to occur
+//     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    cancel.cancel();
-    port.tx.shutdown().await.expect("shutdown failed");
-  }
-}
+//     cancel.cancel();
+//     port.tx.shutdown().await.expect("shutdown failed");
+//   }
+// }

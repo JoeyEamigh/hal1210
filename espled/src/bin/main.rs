@@ -225,13 +225,13 @@ fn run_emulator(mut driver: LedDriver) -> ! {
 }
 
 const START_FRAME_BYTES: usize = 4;
-const SK9822_LATCH_BYTES: usize = 4;
+const SK9822_RESET_BYTES: usize = 4;
 const BYTES_PER_APA102_PIXEL: usize = 4;
 const END_FRAME_BYTES: usize = NUM_LEDS.div_ceil(16);
 const SK9822_FRAME_BYTES: usize =
-  START_FRAME_BYTES + (NUM_LEDS * BYTES_PER_APA102_PIXEL) + SK9822_LATCH_BYTES + END_FRAME_BYTES;
+  START_FRAME_BYTES + (NUM_LEDS * BYTES_PER_APA102_PIXEL) + SK9822_RESET_BYTES + END_FRAME_BYTES;
 const SK9822_FRAME_ALIGNED_BYTES: usize = align_to_word(SK9822_FRAME_BYTES);
-const LED_BRIGHTNESS: u8 = 0x1F;
+const LED_BRIGHTNESS: u8 = 0x1F; // 0x00 (min) to 0x1F (max)
 
 const fn align_to_word(n: usize) -> usize {
   (n + 3) & !3
@@ -289,8 +289,8 @@ impl LedDriver {
       offset += BYTES_PER_APA102_PIXEL;
     }
 
-    frame[offset..offset + SK9822_LATCH_BYTES].fill(0);
-    offset += SK9822_LATCH_BYTES;
+    frame[offset..offset + SK9822_RESET_BYTES].fill(0);
+    offset += SK9822_RESET_BYTES;
 
     frame[offset..offset + END_FRAME_BYTES].fill(0);
     offset += END_FRAME_BYTES;

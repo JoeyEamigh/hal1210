@@ -7,6 +7,9 @@
 			"path": "ledcomm"
 		},
 		{
+			"path": "shadercomm"
+		},
+		{
 			"path": "wayled"
 		},
 		{
@@ -18,8 +21,9 @@
 		"files.exclude": {
 			"espled": true,
 			"ledcomm": true,
+			"shadercomm": true,
 			"wayled": true,
 		},
-		"rust-analyzer.cargo.allTargets": false
+		"rust-analyzer.cargo.allTargets": true
 	}
 }
