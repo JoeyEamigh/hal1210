@@ -1,0 +1,101 @@
+--- /usr/include/libfreenect/libfreenect.hpp	2025-11-13 11:35:36.000000000 -0500
++++ ./libfreenect.hpp	2025-11-18 20:24:31.892583387 -0500
+@@ -34,7 +34,7 @@
+ #define HAVE_STRUCT_TIMESPEC
+ #endif
+ #include <pthread.h>
+-#include <libusb.h>
++#include <libusb-1.0/libusb.h>
+
+ namespace Freenect {
+ 	class Noncopyable {
+@@ -42,8 +42,8 @@
+ 		Noncopyable() {}
+ 		~Noncopyable() {}
+ 	  private:
+-		Noncopyable( const Noncopyable& );
+-		const Noncopyable& operator=( const Noncopyable& );
++		Noncopyable( const Noncopyable& ) = delete;
++		const Noncopyable& operator=( const Noncopyable& ) = delete;
+ 	};
+
+ 	class FreenectTiltState {
+@@ -66,6 +66,15 @@
+
+ 	class FreenectDevice : Noncopyable {
+ 	  public:
++		typedef void (*RustFrameCallback)(void* user_data, void* data, uint32_t timestamp);
++		void setRustVideoCallback(void* cb, void* user) {
++			m_rust_video_cb = (RustFrameCallback)cb;
++			m_rust_video_user = user;
++		}
++		void setRustDepthCallback(void* cb, void* user) {
++			m_rust_depth_cb = (RustFrameCallback)cb;
++			m_rust_depth_user = user;
++		}
+ 		FreenectDevice(freenect_context *_ctx, int _index)
+ 			: m_video_resolution(FREENECT_RESOLUTION_MEDIUM), m_depth_resolution(FREENECT_RESOLUTION_MEDIUM)
+ 		{
+@@ -76,6 +85,10 @@
+ 			freenect_set_depth_callback(m_dev, freenect_depth_callback);
+ 			freenect_set_video_callback(m_dev, freenect_video_callback);
+ 		}
++
++		FreenectDevice(const FreenectDevice&) = delete;
++		FreenectDevice& operator=(const FreenectDevice&) = delete;
++
+ 		virtual ~FreenectDevice() {
+ 			if(freenect_close_device(m_dev) < 0){} //FN_WARNING("Device did not shutdown in a clean fashion");
+ 		}
+@@ -152,10 +165,14 @@
+ 			return m_dev;
+ 		}
+ 		// Do not call directly even in child
+-		virtual void VideoCallback(void *video, uint32_t timestamp) { }
++		virtual void VideoCallback(void *video, uint32_t timestamp) {
++			if (m_rust_video_cb) m_rust_video_cb(m_rust_video_user, video, timestamp);
++		}
+ 		// Do not call directly even in child
+-		virtual void DepthCallback(void *depth, uint32_t timestamp) { }
+-	  protected:
++		virtual void DepthCallback(void *depth, uint32_t timestamp) {
++			if (m_rust_depth_cb) m_rust_depth_cb(m_rust_depth_user, depth, timestamp);
++		}
++	  public:
+ 		int getVideoBufferSize(){
+ 			switch(m_video_format) {
+ 				case FREENECT_VIDEO_RGB:
+@@ -173,7 +190,12 @@
+ 		int getDepthBufferSize(){
+ 			return freenect_get_current_depth_mode(m_dev).bytes;
+ 		}
++	  protected:
+ 	  private:
++		RustFrameCallback m_rust_video_cb = nullptr;
++		void* m_rust_video_user = nullptr;
++		RustFrameCallback m_rust_depth_cb = nullptr;
++		void* m_rust_depth_user = nullptr;
+ 		freenect_device *m_dev;
+ 		freenect_video_format m_video_format;
+ 		freenect_depth_format m_depth_format;
+@@ -201,6 +223,10 @@
+ 			freenect_select_subdevices(m_ctx, static_cast<freenect_device_flags>(FREENECT_DEVICE_MOTOR | FREENECT_DEVICE_CAMERA));
+ 			if(pthread_create(&m_thread, NULL, pthread_callback, (void*)this) != 0) throw std::runtime_error("Cannot initialize freenect thread");
+ 		}
++
++		Freenect(const Freenect&) = delete;
++		Freenect& operator=(const Freenect&) = delete;
++
+ 		~Freenect() {
+ 			m_stop = true;
+ 			for(DeviceMap::iterator it = m_devices.begin() ; it != m_devices.end() ; ++it) {
+@@ -217,6 +243,9 @@
+ 			m_devices[_index] = device;
+ 			return *device;
+ 		}
++		FreenectDevice& createSimpleDevice(int _index) {
++			return createDevice<FreenectDevice>(_index);
++		}
+ 		void deleteDevice(int _index) {
+ 			DeviceMap::iterator it = m_devices.find(_index);
+ 			if (it == m_devices.end()) return;

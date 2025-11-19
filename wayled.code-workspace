@@ -4,6 +4,9 @@
 			"path": "espled"
 		},
 		{
+			"path": "kinect"
+		},
+		{
 			"path": "ledcomm"
 		},
 		{
@@ -20,6 +23,7 @@
 	"settings": {
 		"files.exclude": {
 			"espled": true,
+			"kinect": true,
 			"ledcomm": true,
 			"shadercomm": true,
 			"wayled": true,
