@@ -5,6 +5,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .print_metadata(MetadataPrintout::Full)
     .capability(Capability::Int8)
     .capability(Capability::Int64)
+    .capability(Capability::StorageImageReadWithoutFormat)
     .build()?;
 
   println!("cargo:rerun-if-changed=shaders/border-colors/src/lib.rs");

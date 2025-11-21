@@ -239,7 +239,15 @@ async fn await_compute_dispatch(
           b = color[2],
           "computed average color"
         );
-        match led_tx.send(led::Command::SetStaticColor(color)) {
+        match led_tx.send(led::Command::SetStripState(
+          color
+            .as_slice()
+            .array_chunks::<3>()
+            .copied()
+            .collect::<Vec<[u8; 3]>>()
+            .try_into()
+            .expect("Slice length mismatch"),
+        )) {
           Ok(()) => {
             if frame_stage_tx.send(FrameStage::LedDispatched { frame_id }).is_err() {
               tracing::error!(frame_id, "failed to record LED dispatch stage");

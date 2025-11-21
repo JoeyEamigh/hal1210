@@ -83,35 +83,3 @@ fn main() -> Result<(), Box<dyn Error>> {
     thread::sleep(Duration::from_millis(1_000));
   }
 }
-
-fn hsv_to_rgb(hue: u8, sat: u8, val: u8) -> [u8; 3] {
-  if sat == 0 {
-    return [val, val, val];
-  }
-
-  let h = (hue as f32 / 255.0) * 6.0;
-  let s = sat as f32 / 255.0;
-  let v = val as f32 / 255.0;
-
-  let sector = h.floor() as i32;
-  let fraction = h - sector as f32;
-
-  let p = v * (1.0 - s);
-  let q = v * (1.0 - s * fraction);
-  let t = v * (1.0 - s * (1.0 - fraction));
-
-  let (r, g, b) = match sector.rem_euclid(6) {
-    0 => (v, t, p),
-    1 => (q, v, p),
-    2 => (p, v, t),
-    3 => (p, q, v),
-    4 => (t, p, v),
-    _ => (v, p, q),
-  };
-
-  [scale_channel(r), scale_channel(g), scale_channel(b)]
-}
-
-fn scale_channel(channel: f32) -> u8 {
-  (channel * 255.0).round().clamp(0.0, 255.0) as u8
-}

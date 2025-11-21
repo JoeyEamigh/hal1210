@@ -6,12 +6,14 @@ use core::{
   ptr,
 };
 
+use shadercomm::{SIDE_LEDS, TOP_LEDS};
+
 pub const MAGIC: [u8; 4] = *b"LEDS";
 pub const MAGIC_LEN: usize = MAGIC.len();
 pub const LEN_LEN: usize = 2;
 pub const HEADER_LEN: usize = MAGIC_LEN + LEN_LEN;
 pub const BYTES_PER_LED: usize = 3;
-pub const NUM_LEDS: usize = 60 * 5; // 60 LEDs per meter, 5 meters
+pub const NUM_LEDS: usize = SIDE_LEDS * 2 + TOP_LEDS * 2; // 60 LEDs per meter, 5 meters
 pub const STATE_BYTES: usize = NUM_LEDS * BYTES_PER_LED;
 pub const FRAME_LEN: usize = HEADER_LEN + STATE_BYTES;
 pub const FEEDBACK_MAGIC: [u8; 4] = *b"LEDF";

@@ -1,9 +1,10 @@
 use std::{ffi::CString, io::Cursor, ptr};
 
 use crate::gpu::ComputeError;
-use ash::{Device, util::read_spv, vk};
+use ash::{util::read_spv, vk, Device};
 
 use super::{DispatchConfig, ImageInfo, ShaderResult};
+use shadercomm::AverageBuffer;
 
 pub const SPV: &[u8] = include_bytes!(env!("border_colors.spv"));
 
@@ -13,7 +14,7 @@ pub struct Shaders {
   pipeline: vk::Pipeline,
   descriptor_pool: vk::DescriptorPool,
   descriptor_set: vk::DescriptorSet,
-  output: ShaderOutput<ReturnBuffer>,
+  output: ShaderOutput<AverageBuffer>,
 }
 
 impl Shaders {
@@ -21,7 +22,7 @@ impl Shaders {
     let bindings = [
       vk::DescriptorSetLayoutBinding {
         binding: 0,
-        descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
+        descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
         descriptor_count: 1,
         stage_flags: vk::ShaderStageFlags::COMPUTE,
         ..Default::default()
@@ -92,10 +93,16 @@ impl Shaders {
       device.destroy_shader_module(shader_module, None);
     }
 
-    let descriptor_pool_sizes = [vk::DescriptorPoolSize {
-      ty: vk::DescriptorType::STORAGE_BUFFER,
-      descriptor_count: 2,
-    }];
+    let descriptor_pool_sizes = [
+      vk::DescriptorPoolSize {
+        ty: vk::DescriptorType::STORAGE_IMAGE,
+        descriptor_count: 1,
+      },
+      vk::DescriptorPoolSize {
+        ty: vk::DescriptorType::STORAGE_BUFFER,
+        descriptor_count: 1,
+      },
+    ];
     let descriptor_pool_info = vk::DescriptorPoolCreateInfo {
       pool_size_count: descriptor_pool_sizes.len() as u32,
       p_pool_sizes: descriptor_pool_sizes.as_ptr(),
@@ -139,7 +146,7 @@ impl Shaders {
     let output_info = [vk::DescriptorBufferInfo {
       buffer: output.buffer(),
       offset: 0,
-      range: std::mem::size_of::<ReturnBuffer>() as u64,
+      range: std::mem::size_of::<AverageBuffer>() as u64,
     }];
     let write = [vk::WriteDescriptorSet {
       s_type: vk::StructureType::WRITE_DESCRIPTOR_SET,
@@ -166,19 +173,19 @@ impl Shaders {
     })
   }
 
-  pub fn bind_input_buffer(&self, device: &Device, buffer: vk::Buffer, range: vk::DeviceSize) {
-    let input_info = [vk::DescriptorBufferInfo {
-      buffer,
-      offset: 0,
-      range,
+  pub fn bind_input_image(&self, device: &Device, image_view: vk::ImageView) {
+    let image_info = [vk::DescriptorImageInfo {
+      sampler: vk::Sampler::null(),
+      image_view,
+      image_layout: vk::ImageLayout::GENERAL,
     }];
     let write = [vk::WriteDescriptorSet {
       s_type: vk::StructureType::WRITE_DESCRIPTOR_SET,
       dst_set: self.descriptor_set,
       dst_binding: 0,
       descriptor_count: 1,
-      descriptor_type: vk::DescriptorType::STORAGE_BUFFER,
-      p_buffer_info: input_info.as_ptr(),
+      descriptor_type: vk::DescriptorType::STORAGE_IMAGE,
+      p_image_info: image_info.as_ptr(),
       ..Default::default()
     }];
     unsafe {
@@ -321,9 +328,9 @@ impl<T: Default> ShaderOutput<T> {
 }
 
 unsafe fn border_colors_readback(ptr: *mut std::ffi::c_void) -> ShaderResult {
-  let raw = ptr.cast::<ReturnBuffer>();
+  let raw = ptr.cast::<AverageBuffer>();
   let value = unsafe { ptr::read(raw) };
-  ShaderResult::from(Output::from(value))
+  ShaderResult::from(value)
 }
 
 fn find_memory_type(
@@ -347,57 +354,4 @@ pub struct DispatchParams {
   pub height: u32,
   pub stride: u32,
   pub bytes_per_pixel: u32,
-}
-
-#[repr(C, align(16))]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct ReturnBuffer {
-  sum_r: i64,
-  sum_g: i64,
-  sum_b: i64,
-  pixel_count: i64,
-  _padding: i64,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Output {
-  pub sum_r: i64,
-  pub sum_g: i64,
-  pub sum_b: i64,
-  pub pixel_count: i64,
-}
-
-impl Output {
-  pub fn average_rgb(&self) -> Option<[f32; 3]> {
-    if self.pixel_count <= 0 {
-      return None;
-    }
-    let count = self.pixel_count as f32;
-    Some([
-      (self.sum_r as f32) / count,
-      (self.sum_g as f32) / count,
-      (self.sum_b as f32) / count,
-    ])
-  }
-
-  pub fn average_rgb_u8(&self) -> Option<[u8; 3]> {
-    self.average_rgb().map(|[r, g, b]| {
-      [
-        r.clamp(0.0, 255.0).round() as u8,
-        g.clamp(0.0, 255.0).round() as u8,
-        b.clamp(0.0, 255.0).round() as u8,
-      ]
-    })
-  }
-}
-
-impl From<ReturnBuffer> for Output {
-  fn from(value: ReturnBuffer) -> Self {
-    Self {
-      sum_r: value.sum_r,
-      sum_g: value.sum_g,
-      sum_b: value.sum_b,
-      pixel_count: value.pixel_count,
-    }
-  }
 }

@@ -1,3 +1,5 @@
+#![feature(array_chunks)]
+
 mod bridge;
 mod gpu;
 mod led;

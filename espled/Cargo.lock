@@ -827,6 +827,9 @@ dependencies = [
 [[package]]
 name = "ledcomm"
 version = "0.1.0"
+dependencies = [
+ "shadercomm",
+]
 
 [[package]]
 name = "libc"
@@ -1141,6 +1144,10 @@ dependencies = [
  "serde",
  "unsafe-libyaml",
 ]
+
+[[package]]
+name = "shadercomm"
+version = "0.1.0"
 
 [[package]]
 name = "smart-leds"

@@ -3,16 +3,17 @@ use std::{
   os::fd::{AsFd, OwnedFd},
 };
 
-use calloop::{LoopHandle, channel};
+use calloop::{channel, LoopHandle};
 use calloop_wayland_source::WaylandSource;
 use wayland_client::{
-  Connection, Dispatch, Proxy, QueueHandle, delegate_noop, event_created_child,
+  delegate_noop, event_created_child,
   protocol::{
     wl_buffer::WlBuffer,
     wl_output::WlOutput,
     wl_registry::{self, WlRegistry},
     wl_seat::WlSeat,
   },
+  Connection, Dispatch, Proxy, QueueHandle,
 };
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
   zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
@@ -36,6 +37,8 @@ pub enum Command {
   ComputeDone,
 }
 
+pub const MAX_DMABUF_PLANES: usize = 4;
+
 #[derive(Debug)]
 pub struct Dmabuf {
   pub fd: OwnedFd,
@@ -44,6 +47,14 @@ pub struct Dmabuf {
   pub stride: u32,
   pub format: u32,
   pub modifier: u64,
+  pub num_planes: u32,
+  pub planes: [DmabufPlane; MAX_DMABUF_PLANES],
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DmabufPlane {
+  pub stride: u32,
+  pub offset: u32,
 }
 
 #[derive(Debug)]
@@ -128,6 +139,8 @@ impl Wayland {
 #[derive(Default)]
 struct State {
   frame: Option<ZwlrScreencopyFrameV1>,
+  buffer_created: bool,
+  frame_ready_for_copy: bool,
 }
 
 delegate_noop!(Wayland: ignore WlSeat);
@@ -315,6 +328,7 @@ impl Dispatch<ZwpLinuxBufferParamsV1, ()> for Wayland {
           return;
         }
 
+        data.state.buffer_created = true;
         data.screencopy_frame();
       }
       zwp_linux_buffer_params_v1::Event::Failed => {
@@ -365,12 +379,15 @@ impl Dispatch<ZwlrScreencopyFrameV1, ()> for Wayland {
         if let Err(err) = data.tx.send(Event::FrameReady) {
           tracing::error!("failed to send frame ready event: {}", err);
         }
+
+        data.state.frame = None;
       }
       zwlr_screencopy_frame_v1::Event::Failed => {
         tracing::error!("screencopy frame failed");
       }
       zwlr_screencopy_frame_v1::Event::BufferDone => {
         tracing::debug!("screencopy frame buffer done");
+        data.state.frame_ready_for_copy = true;
         data.screencopy_frame();
       }
       zwlr_screencopy_frame_v1::Event::Damage { x, y, width, height } => {
@@ -466,6 +483,25 @@ impl Wayland {
     };
 
     let bo_modifier: u64 = bo.modifier().into();
+    let reported_planes = bo.plane_count();
+    let plane_count = reported_planes.min(MAX_DMABUF_PLANES as u32);
+
+    if plane_count == 0 {
+      tracing::error!(reported_planes, "gbm buffer reported zero planes");
+      return;
+    }
+    if plane_count != reported_planes {
+      tracing::warn!(reported_planes, supported = plane_count, "clamping dmabuf plane count");
+    }
+
+    let mut planes = [DmabufPlane::default(); MAX_DMABUF_PLANES];
+    for (i, plane) in planes.iter_mut().take(plane_count as usize).enumerate() {
+      *plane = DmabufPlane {
+        stride: bo.stride_for_plane(i as i32),
+        offset: bo.offset(i as i32),
+      };
+    }
+
     if let Err(err) = self.tx.send(Event::DmabufCreated(Dmabuf {
       fd: bo_fd.try_clone().expect("failed to clone gbm buffer object fd"),
       width,
@@ -473,19 +509,24 @@ impl Wayland {
       stride: bo.stride(),
       format,
       modifier: bo_modifier,
+      num_planes: plane_count,
+      planes,
     })) {
       tracing::error!("failed to send dmabuf created event: {}", err);
     }
     tracing::trace!("requesting dmabuf buffer creation");
     let params = dmabuf.create_params(qh, ());
-    params.add(
-      bo_fd.as_fd(),
-      0,
-      0,
-      bo.stride(),
-      (bo_modifier >> 32) as u32,
-      (bo_modifier & 0xffffffff) as u32,
-    );
+    for (i, plane) in planes.iter().take(plane_count as usize).enumerate() {
+      params.add(
+        bo_fd.as_fd(),
+        i as u32,
+        plane.offset,
+        plane.stride,
+        (bo_modifier >> 32) as u32,
+        (bo_modifier & 0xffffffff) as u32,
+      );
+    }
+
     params.create(
       width as i32,
       height as i32,

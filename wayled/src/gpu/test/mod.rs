@@ -3,10 +3,12 @@ use crate::{
   wayland::{self, Wayland},
 };
 
+mod buffer;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn border_averages() {
-  // crate::monitoring::init_logger();
-  let (wayland_cmd_tx, wayland_cmd_rx) = calloop::channel::channel();
+  crate::monitoring::init_logger();
+  let (_wayland_cmd_tx, wayland_cmd_rx) = calloop::channel::channel();
   let (wayland_event_tx, mut wayland_event_rx) = tokio::sync::mpsc::unbounded_channel();
 
   let mut event_loop = calloop::EventLoop::try_new().expect("could not create event loop");
@@ -25,19 +27,24 @@ async fn border_averages() {
     loop {
       if let Some(wayland::Event::DmabufCreated(dmabuf)) = wayland_event_rx.recv().await {
         println!("Got dmabuf thing");
+        println!(
+          "{:?}, {:?} -> stride : {:?}, format: {:?}, modifier: {:?}",
+          dmabuf.width, dmabuf.height, dmabuf.stride, dmabuf.format, dmabuf.modifier
+        );
         compute.set_screen_dmabuf(dmabuf).expect("failed to set screen dmabuf");
-
         println!("set the dmabuf thing");
+        let start = Instant::now();
         match compute.dispatch() {
           Ok(compute_rx) => {
-            println!("Got compute result");
             match compute_rx.await {
               Ok(result) => {
+                let duration = start.elapsed();
+                println!("Got compute result after {duration:?}");
                 println!("Got shader result");
                 if let Some(color) = result.average_rgb_u8() {
+                  println!("Done with full color stack after {:?}", start.elapsed());
                   println!("is color: {color:?}");
-
-                  assert!(true);
+                  println!("Length of color: {:?}", color.len());
 
                   signal.stop();
                   return;

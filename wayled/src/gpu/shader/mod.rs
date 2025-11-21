@@ -1,5 +1,6 @@
 use super::ComputeError;
 use ash::{Device, vk};
+use shadercomm::{AverageBuffer, SIDE_LEDS, TOP_LEDS};
 
 pub mod border_colors;
 
@@ -40,11 +41,10 @@ pub struct DispatchConfig<'a> {
 
 #[derive(Debug, Clone, Copy)]
 pub enum ShaderResult {
-  BorderColors(border_colors::Output),
+  BorderColors(AverageBuffer),
 }
-
 impl ShaderResult {
-  pub fn average_rgb_u8(&self) -> Option<[u8; 3]> {
+  pub fn average_rgb_u8(&self) -> Option<[u8; 3 * (SIDE_LEDS * 2 + TOP_LEDS * 2)]> {
     match self {
       ShaderResult::BorderColors(output) => output.average_rgb_u8(),
     }
@@ -53,12 +53,12 @@ impl ShaderResult {
 
 impl Default for ShaderResult {
   fn default() -> Self {
-    ShaderResult::BorderColors(border_colors::Output::default())
+    ShaderResult::BorderColors(AverageBuffer::default())
   }
 }
 
-impl From<border_colors::Output> for ShaderResult {
-  fn from(value: border_colors::Output) -> Self {
+impl From<AverageBuffer> for ShaderResult {
+  fn from(value: AverageBuffer) -> Self {
     ShaderResult::BorderColors(value)
   }
 }
@@ -73,8 +73,8 @@ impl Shaders {
     Ok(Self { border_colors })
   }
 
-  pub fn bind_input(&self, device: &Device, buffer: vk::Buffer, range: vk::DeviceSize) {
-    self.border_colors.bind_input_buffer(device, buffer, range);
+  pub fn bind_input_image(&self, device: &Device, image_view: vk::ImageView) {
+    self.border_colors.bind_input_image(device, image_view);
   }
 
   pub fn reset_output(&self, shader: ShaderKind) {
@@ -103,4 +103,3 @@ impl Shaders {
 
 unsafe impl Send for Shaders {}
 unsafe impl Sync for Shaders {}
-
