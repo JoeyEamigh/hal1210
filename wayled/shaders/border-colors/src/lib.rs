@@ -13,7 +13,7 @@ use spirv_std::{
 
 use shadercomm::{AverageBuffer, DEPTH, DispatchParams, PADDING, SIDE_LEDS, TOP_LEDS, WorkgroupSums};
 
-type InputImage = Image!(2D, type=u32, sampled=false);
+type InputImage = Image!(2D, type=f32, sampled=false);
 
 #[spirv(compute(threads(1024, 1, 1)))]
 pub fn main(
@@ -157,13 +157,13 @@ pub fn main(
       let x = (index % block_width) + x_min;
       let y = (index / block_width) + y_min;
       let coords = IVec2::new(x as i32, y as i32);
-      let texel: UVec4 = image.read(coords);
-      let b_val = texel.x;
+      let texel = image.read(coords);
+      let r_val = texel.x;
       let g_val = texel.y;
-      let r_val = texel.z;
-      sum_r += r_val;
-      sum_g += g_val;
-      sum_b += b_val;
+      let b_val = texel.z;
+      sum_r += (r_val * 255.0) as u32;
+      sum_g += (g_val * 255.0) as u32;
+      sum_b += (b_val * 255.0) as u32;
       count += 1;
 
       index += threads_per_led * 2;

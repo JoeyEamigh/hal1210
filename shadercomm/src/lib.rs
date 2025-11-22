@@ -5,7 +5,7 @@ pub const TOP_LEDS: usize = 85; // LEDS on top of screen
 
 pub const PADDING: usize = 10; // Pixel padding
 
-pub const DEPTH: usize = 300; // Pixels to go in, must be less than height
+pub const DEPTH: usize = 500; // Pixels to go in, must be less than height
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

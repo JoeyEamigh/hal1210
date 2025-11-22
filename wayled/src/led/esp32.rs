@@ -45,6 +45,12 @@ impl Esp32Device {
   }
 
   pub async fn close(mut self) -> Result<(), Esp32Error> {
+    if let Err(err) = self.send_static_color([0, 0, 0]).await {
+      tracing::warn!("failed to send ESP32 blackout frame during shutdown: {err}");
+    } else {
+      tracing::trace!("ESP32 blackout frame sent before shutdown");
+    }
+
     self.tx.shutdown().await.map_err(Esp32Error::Write)
   }
 
