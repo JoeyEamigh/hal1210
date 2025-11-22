@@ -6,13 +6,13 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-WorkingDirectory=<<PWD>>/wayled
-ExecStart=<<PWD>>/wayled/target/release/wayled
+WorkingDirectory=<<PWD>>/daemon
+ExecStart=<<PWD>>/daemon/target/release/hal1210
 Restart=on-failure
 RestartSec=5
 
 Environment=WAYLAND_DISPLAY=wayland-1
-Environment=RUST_LOG=wayled=info
+Environment=RUST_LOG=hal1210=info
 
 [Install]
 WantedBy=graphical-session.target

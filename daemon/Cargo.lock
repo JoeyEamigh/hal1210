@@ -665,6 +665,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "hal1210"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "async-hid",
+ "calloop",
+ "calloop-wayland-source",
+ "derive_more 2.0.1",
+ "drm",
+ "futures",
+ "gbm",
+ "ledcomm",
+ "libc",
+ "serialport",
+ "shadercomm",
+ "spirv-builder",
+ "thiserror",
+ "tokio",
+ "tokio-serial",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-wlr",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2151,34 +2179,6 @@ dependencies = [
  "log",
  "memoffset",
  "pkg-config",
-]
-
-[[package]]
-name = "wayled"
-version = "0.1.0"
-dependencies = [
- "ash",
- "async-hid",
- "calloop",
- "calloop-wayland-source",
- "derive_more 2.0.1",
- "drm",
- "futures",
- "gbm",
- "ledcomm",
- "libc",
- "serialport",
- "shadercomm",
- "spirv-builder",
- "thiserror",
- "tokio",
- "tokio-serial",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "wayland-client",
- "wayland-protocols",
- "wayland-protocols-wlr",
 ]
 
 [[package]]

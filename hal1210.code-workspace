@@ -1,6 +1,9 @@
 {
 	"folders": [
 		{
+			"path": "daemon"
+		},
+		{
 			"path": "espled"
 		},
 		{
@@ -13,20 +16,17 @@
 			"path": "shadercomm"
 		},
 		{
-			"path": "wayled"
-		},
-		{
 			"path": ".",
 			"name": "root"
 		}
 	],
 	"settings": {
 		"files.exclude": {
+			"daemon": true,
 			"espled": true,
 			"kinect": true,
 			"ledcomm": true,
 			"shadercomm": true,
-			"wayled": true,
 		},
 		"rust-analyzer.cargo.allTargets": true
 	}
