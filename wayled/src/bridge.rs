@@ -5,7 +5,10 @@ use std::{
 
 use tokio::{sync::oneshot, task::JoinHandle};
 
-use crate::{gpu, led, monitoring, wayland};
+use crate::{
+  gpu, led, monitoring,
+  wayland::{self, idle::IdleEvent},
+};
 
 type FrameStageTx = tokio::sync::mpsc::UnboundedSender<FrameStage>;
 type FrameStageRx = tokio::sync::mpsc::UnboundedReceiver<FrameStage>;
@@ -24,6 +27,8 @@ pub struct Handler {
   wayland_rx: wayland::EventRx,
   led_tx: led::CommandTx,
   led_rx: led::EventRx,
+
+  idle: bool,
 
   loop_signal: calloop::LoopSignal,
   cancel_token: tokio_util::sync::CancellationToken,
@@ -57,6 +62,8 @@ impl Handler {
       led_tx,
       led_rx,
 
+      idle: false,
+
       loop_signal,
       cancel_token,
 
@@ -70,6 +77,23 @@ impl Handler {
 
   async fn handle_wayland_event(&mut self, event: wayland::Event) {
     match event {
+      wayland::Event::Idle(idle_state) => match idle_state {
+        IdleEvent::Idle => {
+          self.idle = true;
+          tracing::debug!("turning off leds since seat is idle");
+
+          if let Err(err) = self.led_tx.send(led::Command::SetStaticColor([0, 0, 0])) {
+            tracing::error!("failed to send turn off command to LED manager: {}", err);
+          }
+        }
+        IdleEvent::Active => {
+          self.idle = false;
+          tracing::debug!("seat is active again, restarting frame loop");
+          if let Err(err) = self.wayland_tx.send(wayland::Command::ComputeDone) {
+            tracing::error!("failed to restart frame loop: {}", err);
+          }
+        }
+      },
       wayland::Event::DmabufCreated(dmabuf) => {
         tracing::debug!("setting DMA-BUF in compute module");
 
@@ -78,6 +102,11 @@ impl Handler {
         }
       }
       wayland::Event::FrameReady => {
+        if self.idle {
+          tracing::debug!("skipping frame processing because seat is idle");
+          return;
+        }
+
         tracing::debug!("wayland frame is ready for processing");
         let frame_id = self.frame_counter;
         self.frame_counter = self.frame_counter.wrapping_add(1);
@@ -90,9 +119,10 @@ impl Handler {
             let wayland_tx = self.wayland_tx.clone();
             let led_tx = self.led_tx.clone();
             let frame_stage_tx = self.frame_stage_tx.clone();
+            let idle = self.idle;
 
             tokio::spawn(async move {
-              await_compute_dispatch(compute_rx, wayland_tx, led_tx, frame_id, frame_stage_tx).await;
+              await_compute_dispatch(compute_rx, wayland_tx, led_tx, frame_id, frame_stage_tx, idle).await;
             });
           }
           Err(gpu::ComputeError::DispatchInFlight) => {
@@ -226,6 +256,7 @@ async fn await_compute_dispatch(
   led_tx: led::CommandTx,
   frame_id: u64,
   frame_stage_tx: FrameStageTx,
+  idle: bool,
 ) {
   match compute_rx.await {
     Ok(result) => {
@@ -239,26 +270,35 @@ async fn await_compute_dispatch(
           b = color[2],
           "computed average color"
         );
-        match led_tx.send(led::Command::SetStripState(
-          color
-            .as_slice()
-            .array_chunks::<3>()
-            .copied()
-            .collect::<Vec<[u8; 3]>>()
-            .try_into()
-            .expect("Slice length mismatch"),
-        )) {
-          Ok(()) => {
-            if frame_stage_tx.send(FrameStage::LedDispatched { frame_id }).is_err() {
-              tracing::error!(frame_id, "failed to record LED dispatch stage");
-            }
+
+        if idle {
+          tracing::debug!("ignoring shader compute result while idle");
+
+          if let Err(err) = led_tx.send(led::Command::SetStaticColor([0, 0, 0])) {
+            tracing::error!("error setting idle led strip state: {}", err);
           }
-          Err(err) => {
-            tracing::error!("failed to send compute result to LED manager: {}", err);
-            let _ = frame_stage_tx.send(FrameStage::Aborted {
-              frame_id,
-              reason: format!("failed to send LED command: {err}"),
-            });
+        } else {
+          match led_tx.send(led::Command::SetStripState(
+            color
+              .as_slice()
+              .array_chunks::<3>()
+              .copied()
+              .collect::<Vec<[u8; 3]>>()
+              .try_into()
+              .expect("Slice length mismatch"),
+          )) {
+            Ok(()) => {
+              if frame_stage_tx.send(FrameStage::LedDispatched { frame_id }).is_err() {
+                tracing::error!(frame_id, "failed to record LED dispatch stage");
+              }
+            }
+            Err(err) => {
+              tracing::error!("failed to send compute result to LED manager: {}", err);
+              let _ = frame_stage_tx.send(FrameStage::Aborted {
+                frame_id,
+                reason: format!("failed to send LED command: {err}"),
+              });
+            }
           }
         }
       } else {

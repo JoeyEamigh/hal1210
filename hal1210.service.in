@@ -1,0 +1,18 @@
+[Unit]
+Description=system daemon for the sickest media pc ever
+PartOf=graphical-session.target
+After=graphical-session.target
+#Requisite=graphical-session.target
+
+[Service]
+Type=simple
+WorkingDirectory=<<PWD>>/wayled
+ExecStart=<<PWD>>/wayled/target/release/wayled
+Restart=on-failure
+RestartSec=5
+
+Environment=WAYLAND_DISPLAY=wayland-1
+Environment=RUST_LOG=wayled=info
+
+[Install]
+WantedBy=graphical-session.target

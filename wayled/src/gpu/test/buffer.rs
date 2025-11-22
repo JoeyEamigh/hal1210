@@ -18,7 +18,7 @@ async fn cpu_copy_contains_pixels() {
   let mut compute = Compute::init().expect("could not initialize compute module");
 
   tokio::spawn(async move {
-    let mut pending_dmabuf: Option<wayland::Dmabuf> = None;
+    let mut pending_dmabuf: Option<wayland::screencopy::Dmabuf> = None;
 
     while let Some(event) = wayland_event_rx.recv().await {
       match event {
@@ -43,6 +43,7 @@ async fn cpu_copy_contains_pixels() {
           signal.stop();
           return;
         }
+        _ => {}
       }
     }
   });

@@ -4,15 +4,15 @@ use std::{
   os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd},
   ptr,
   sync::{
-    Arc,
     atomic::{AtomicBool, Ordering},
+    Arc,
   },
   thread,
   time::Instant,
 };
 
 use self::shader::{DispatchScratch, ImageInfo, ShaderKind, ShaderResult, Shaders};
-use ash::{Device, Entry, Instance, vk};
+use ash::{vk, Device, Entry, Instance};
 use tokio::{sync::oneshot, task::spawn_blocking};
 
 use crate::wayland;
@@ -163,7 +163,7 @@ impl Compute {
     }
   }
 
-  pub fn set_screen_dmabuf(&mut self, dmabuf: wayland::Dmabuf) -> Result<(), ComputeError> {
+  pub fn set_screen_dmabuf(&mut self, dmabuf: wayland::screencopy::Dmabuf) -> Result<(), ComputeError> {
     tracing::debug!(
       width = dmabuf.width,
       height = dmabuf.height,
@@ -333,7 +333,7 @@ impl Compute {
   }
 
   #[tracing::instrument(level = "trace", skip_all)]
-  fn import_screen_dmabuf(&self, dmabuf: wayland::Dmabuf) -> Result<MappedDmabuf, ComputeError> {
+  fn import_screen_dmabuf(&self, dmabuf: wayland::screencopy::Dmabuf) -> Result<MappedDmabuf, ComputeError> {
     let (bytes_per_pixel, known_format) = format_bytes_per_pixel(dmabuf.format);
     if !known_format {
       tracing::warn!(
