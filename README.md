@@ -6,4 +6,3 @@ a system daemon for the sickest media pc ever
 ((very unfinished))
 
 will be done soon™
-

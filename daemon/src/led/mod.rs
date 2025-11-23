@@ -1,20 +1,12 @@
+use daemoncomm::LedCommand;
 use tokio_util::sync::CancellationToken;
 
-pub type CommandTx = tokio::sync::mpsc::UnboundedSender<Command>;
-pub type CommandRx = tokio::sync::mpsc::UnboundedReceiver<Command>;
+pub type CommandTx = tokio::sync::mpsc::UnboundedSender<LedCommand>;
+pub type CommandRx = tokio::sync::mpsc::UnboundedReceiver<LedCommand>;
 pub type EventTx = tokio::sync::mpsc::UnboundedSender<Event>;
 pub type EventRx = tokio::sync::mpsc::UnboundedReceiver<Event>;
 
 mod esp32;
-
-pub type LedStripState = ledcomm::StateFrame;
-
-#[allow(clippy::large_enum_variant)]
-#[derive(Debug)]
-pub enum Command {
-  SetStaticColor([u8; 3]),
-  SetStripState(LedStripState),
-}
 
 #[derive(Debug)]
 pub enum Event {

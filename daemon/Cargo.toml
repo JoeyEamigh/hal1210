@@ -8,6 +8,7 @@ members = [".", "shaders/*"]
 resolver = "3"
 
 [dependencies]
+daemoncomm = { path = "../daemoncomm", features = ["server"] }
 ledcomm = { path = "../ledcomm" }
 shadercomm = { path = "../shadercomm" }
 

@@ -1,11 +1,12 @@
 use std::{env, path::PathBuf, time::Duration};
 
-use ledcomm::{BYTES_PER_LED, NUM_LEDS, WRITE_FEEDBACK_LEN, parse_write_feedback};
+use daemoncomm::{LedCommand, LedStripState};
+use ledcomm::{parse_write_feedback, BYTES_PER_LED, NUM_LEDS, WRITE_FEEDBACK_LEN};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio_serial::{SerialPortBuilderExt, SerialPortType, SerialStream, UsbPortInfo};
 use tokio_util::sync::CancellationToken;
 
-use super::{Event, EventTx, LedStripState};
+use super::{Event, EventTx};
 
 const DEFAULT_BAUD: u32 = 5_000_000;
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(100);
@@ -54,16 +55,17 @@ impl Esp32Device {
     self.tx.shutdown().await.map_err(Esp32Error::Write)
   }
 
-  pub async fn handle_command(&mut self, command: super::Command) -> Result<(), Esp32Error> {
+  pub async fn handle_command(&mut self, command: LedCommand) -> Result<(), Esp32Error> {
     match command {
-      super::Command::SetStaticColor(color) => {
+      LedCommand::SetStaticColor(color) => {
         tracing::debug!(r = color[0], g = color[1], b = color[2], "ESP32 static color command");
         self.send_static_color(color).await
       }
-      super::Command::SetStripState(state) => {
+      LedCommand::SetStripState(state) => {
         tracing::debug!("ESP32 strip state command");
         self.send_strip_state(&state).await
       }
+      command => todo!("LED command not implemented: {:?}", command),
     }
   }
 

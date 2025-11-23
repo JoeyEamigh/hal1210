@@ -1,7 +1,13 @@
 {
 	"folders": [
 		{
+			"path": "bindings"
+		},
+		{
 			"path": "daemon"
+		},
+		{
+			"path": "daemoncomm"
 		},
 		{
 			"path": "espled"
@@ -22,12 +28,16 @@
 	],
 	"settings": {
 		"files.exclude": {
+			"bindings": true,
 			"daemon": true,
+			"daemoncomm": true,
 			"espled": true,
 			"kinect": true,
 			"ledcomm": true,
 			"shadercomm": true,
 		},
-		"rust-analyzer.cargo.allTargets": true
+		"rust-analyzer.cargo.allTargets": true,
+		"rust-analyzer.cargo.features": "all",
+		"rust-analyzer.check.features": "all",
 	}
 }

@@ -3,10 +3,11 @@ use std::{
   time::Instant,
 };
 
+use daemoncomm::LedCommand;
 use tokio::{sync::oneshot, task::JoinHandle};
 
 use crate::{
-  gpu, led, monitoring,
+  com, gpu, led, monitoring,
   wayland::{self, idle::IdleEvent},
 };
 
@@ -23,23 +24,31 @@ enum FrameStage {
 pub struct Handler {
   compute: gpu::Compute,
 
+  // communication channels
   wayland_tx: wayland::CommandTx,
   wayland_rx: wayland::EventRx,
   led_tx: led::CommandTx,
   led_rx: led::EventRx,
+  com_man_tx: com::ServerResTx,
+  com_man_rx: com::ClientReqRx,
 
+  // state
   idle: bool,
+  manual_mode: bool,
 
-  loop_signal: calloop::LoopSignal,
-  cancel_token: tokio_util::sync::CancellationToken,
-
+  // frame lifetime
   frame_stage_tx: FrameStageTx,
   frame_stage_rx: FrameStageRx,
   frame_counter: u64,
   frame_starts: HashMap<u64, Instant>,
   frames_inflight: VecDeque<(u64, Instant)>,
+
+  // control
+  loop_signal: calloop::LoopSignal,
+  cancel_token: tokio_util::sync::CancellationToken,
 }
 
+#[allow(clippy::too_many_arguments)]
 impl Handler {
   pub fn new(
     compute: gpu::Compute,
@@ -48,6 +57,8 @@ impl Handler {
     wayland_rx: wayland::EventRx,
     led_tx: led::CommandTx,
     led_rx: led::EventRx,
+    com_man_tx: com::ServerResTx,
+    com_man_rx: com::ClientReqRx,
 
     loop_signal: calloop::LoopSignal,
     cancel_token: tokio_util::sync::CancellationToken,
@@ -61,17 +72,20 @@ impl Handler {
       wayland_rx,
       led_tx,
       led_rx,
+      com_man_tx,
+      com_man_rx,
 
       idle: false,
-
-      loop_signal,
-      cancel_token,
+      manual_mode: false,
 
       frame_stage_tx,
       frame_stage_rx,
       frame_counter: 0,
       frame_starts: HashMap::new(),
       frames_inflight: VecDeque::new(),
+
+      loop_signal,
+      cancel_token,
     }
   }
 
@@ -82,7 +96,7 @@ impl Handler {
           self.idle = true;
           tracing::debug!("turning off leds since seat is idle");
 
-          if let Err(err) = self.led_tx.send(led::Command::SetStaticColor([0, 0, 0])) {
+          if let Err(err) = self.led_tx.send(LedCommand::SetStaticColor([0, 0, 0])) {
             tracing::error!("failed to send turn off command to LED manager: {}", err);
           }
         }
@@ -107,6 +121,12 @@ impl Handler {
           return;
         }
 
+        // TODO: remember to send ComputeDone when manual mode is disabled
+        if self.manual_mode {
+          tracing::debug!("skipping frame processing because manual mode is enabled");
+          return;
+        }
+
         tracing::debug!("wayland frame is ready for processing");
         let frame_id = self.frame_counter;
         self.frame_counter = self.frame_counter.wrapping_add(1);
@@ -120,9 +140,19 @@ impl Handler {
             let led_tx = self.led_tx.clone();
             let frame_stage_tx = self.frame_stage_tx.clone();
             let idle = self.idle;
+            let manual_mode = self.manual_mode;
 
             tokio::spawn(async move {
-              await_compute_dispatch(compute_rx, wayland_tx, led_tx, frame_id, frame_stage_tx, idle).await;
+              await_compute_dispatch(
+                compute_rx,
+                wayland_tx,
+                led_tx,
+                frame_id,
+                frame_stage_tx,
+                idle,
+                manual_mode,
+              )
+              .await;
             });
           }
           Err(gpu::ComputeError::DispatchInFlight) => {
@@ -257,6 +287,7 @@ async fn await_compute_dispatch(
   frame_id: u64,
   frame_stage_tx: FrameStageTx,
   idle: bool,
+  manual_mode: bool,
 ) {
   match compute_rx.await {
     Ok(result) => {
@@ -274,11 +305,13 @@ async fn await_compute_dispatch(
         if idle {
           tracing::debug!("ignoring shader compute result while idle");
 
-          if let Err(err) = led_tx.send(led::Command::SetStaticColor([0, 0, 0])) {
+          if let Err(err) = led_tx.send(LedCommand::SetStaticColor([0, 0, 0])) {
             tracing::error!("error setting idle led strip state: {}", err);
           }
+        } else if manual_mode {
+          tracing::debug!("ignoring shader compute result while in manual mode");
         } else {
-          match led_tx.send(led::Command::SetStripState(
+          match led_tx.send(LedCommand::SetStripState(
             color
               .as_slice()
               .array_chunks::<3>()
