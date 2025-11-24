@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use daemoncomm::{LedCommand, LedStripState};
 use ledcomm::zero_state_frame;
 use tokio::time;
@@ -116,17 +118,26 @@ impl LedManager {
           self.device.send_strip_state(&self.current_frame).await?;
         }
       }
-      LedCommand::FadeIn(target) => {
+      LedCommand::FadeIn {
+        state: target,
+        duration_ms,
+      } => {
         self.cancel_animation();
         self.current_frame = zero_state_frame();
-        self.animation = Some(AnimationState::fade_in(target, DEFAULT_FADE_IN_DURATION));
+        let duration = duration_ms
+          .map(Duration::from_millis)
+          .unwrap_or(DEFAULT_FADE_IN_DURATION);
+        self.animation = Some(AnimationState::fade_in(target, duration));
       }
-      LedCommand::FadeOut => {
+      LedCommand::FadeOut { duration_ms } => {
         self.cancel_animation();
         if self.is_black() {
           tracing::debug!("fade out requested but frame already black; skipping animation");
         } else {
-          self.animation = Some(AnimationState::fade_out(&self.current_frame, DEFAULT_FADE_OUT_DURATION));
+          let duration = duration_ms
+            .map(Duration::from_millis)
+            .unwrap_or(DEFAULT_FADE_OUT_DURATION);
+          self.animation = Some(AnimationState::fade_out(&self.current_frame, duration));
         }
       }
       LedCommand::Rainbow => {

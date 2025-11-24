@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Awaitable, Callable, Literal, Optional, Tuple, TypedDict, Union
+from typing import Awaitable, Callable, Literal, NotRequired, Optional, Tuple, TypedDict, Union
 
 RgbColor = Tuple[int, int, int]
 
@@ -17,11 +17,21 @@ class SetStripState(TypedDict):
 
 class FadeIn(TypedDict):
     command: Literal["fadeIn"]
-    args: str
+    args: Union[str, "FadeInArgs"]
 
 
 class FadeOut(TypedDict):
     command: Literal["fadeOut"]
+    args: NotRequired["FadeOutArgs"]
+
+
+class FadeInArgs(TypedDict):
+    state: str
+    durationMs: NotRequired[int]
+
+
+class FadeOutArgs(TypedDict):
+    durationMs: NotRequired[int]
 
 
 class Rainbow(TypedDict):
@@ -54,7 +64,27 @@ class GetManualModeMessage(TypedDict):
     type: Literal["getManualMode"]
 
 
-MessageToServerData = Union[LedMessage, SetManualModeMessage, GetManualModeMessage]
+class IdleInhibitPayload(TypedDict):
+    enabled: bool
+    timeoutMs: NotRequired[int]
+
+
+class SetIdleInhibitMessage(TypedDict):
+    type: Literal["setIdleInhibit"]
+    data: IdleInhibitPayload
+
+
+class GetIdleInhibitMessage(TypedDict):
+    type: Literal["getIdleInhibit"]
+
+
+MessageToServerData = Union[
+    LedMessage,
+    SetManualModeMessage,
+    GetManualModeMessage,
+    SetIdleInhibitMessage,
+    GetIdleInhibitMessage,
+]
 
 
 class MessageBase(TypedDict):
@@ -83,7 +113,17 @@ class ManualModeMessage(MessageBase):
     data: ManualModeState
 
 
-MessageToClient = Union[AckMessage, NackMessage, ManualModeMessage]
+class IdleInhibitState(TypedDict):
+    enabled: bool
+    timeoutMs: NotRequired[int]
+
+
+class IdleInhibitMessage(MessageBase):
+    type: Literal["idleInhibit"]
+    data: IdleInhibitState
+
+
+MessageToClient = Union[AckMessage, NackMessage, ManualModeMessage, IdleInhibitMessage]
 
 
 MessageCallback = Callable[[MessageToClient], None]

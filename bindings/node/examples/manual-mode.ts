@@ -5,9 +5,12 @@ import type { MessageToClient, MessageToServerData } from '../dist/index.js';
 import { Hal1210Client } from '../dist/index.js';
 
 const GET_MANUAL_MODE: MessageToServerData = { type: 'getManualMode' };
+const GET_IDLE_INHIBIT: MessageToServerData = { type: 'getIdleInhibit' };
 const RAINBOW_COMMAND: MessageToServerData = { type: 'led', data: { command: 'rainbow' } };
 const TIMEOUT_MS = 2_000;
 const RAINBOW_DURATION_MS = 10_000;
+const IDLE_INHIBIT_TIMEOUT_MS = 15_000;
+const FADE_OUT_DURATION_MS = 3_000;
 
 async function waitForResponse(client: Hal1210Client, timeoutMs: number): Promise<MessageToClient | null> {
   return new Promise((resolve, reject) => {
@@ -84,9 +87,45 @@ async function setManualMode(client: Hal1210Client, enabled: boolean): Promise<v
   await waitForAck(client, messageId);
 }
 
+async function requestIdleInhibitStatus(client: Hal1210Client, label: string): Promise<boolean> {
+  const messageId = client.send(GET_IDLE_INHIBIT);
+  console.log(`Sent idle inhibit request (${label}) (message id: ${messageId})`);
+  const response = await waitForType(client, 'idleInhibit', TIMEOUT_MS);
+  const enabled = response.data.enabled;
+  const timeout = response.data.timeoutMs;
+  const timeoutLabel = timeout !== undefined ? ` (timeout ${timeout} ms)` : '';
+  console.log(`${label}: daemon reports idle inhibit ${enabled ? 'ENABLED' : 'DISABLED'}${timeoutLabel}.`);
+  return enabled;
+}
+
+async function setIdleInhibit(client: Hal1210Client, enabled: boolean, timeoutMs?: number): Promise<void> {
+  const data: { enabled: boolean; timeoutMs?: number } = { enabled };
+  if (timeoutMs !== undefined) {
+    data.timeoutMs = timeoutMs;
+  }
+  const request: MessageToServerData = { type: 'setIdleInhibit', data };
+  const messageId = client.send(request);
+  const timeoutLabel = timeoutMs !== undefined ? `, timeout ${timeoutMs} ms` : '';
+  console.log(`Sent ${enabled ? 'enable' : 'disable'} idle inhibit request (message id: ${messageId}${timeoutLabel}).`);
+  await waitForAck(client, messageId);
+}
+
 async function setRainbow(client: Hal1210Client): Promise<void> {
   const messageId = client.send(RAINBOW_COMMAND);
   console.log(`Sent rainbow command (message id: ${messageId}).`);
+  await waitForAck(client, messageId);
+}
+
+async function fadeOut(client: Hal1210Client, durationMs: number): Promise<void> {
+  const request: MessageToServerData = {
+    type: 'led',
+    data: {
+      command: 'fadeOut',
+      args: { durationMs },
+    },
+  };
+  const messageId = client.send(request);
+  console.log(`Sent fade out (${durationMs} ms) (message id: ${messageId}).`);
   await waitForAck(client, messageId);
 }
 
@@ -97,18 +136,26 @@ function sleep(ms: number): Promise<void> {
 async function main(): Promise<void> {
   const client = await Hal1210Client.connect(true);
   try {
+    await requestIdleInhibitStatus(client, 'Initial idle inhibit status');
     await requestManualModeStatus(client, 'Initial status');
 
     await setManualMode(client, true);
     const enabled = await requestManualModeStatus(client, 'Post-enable status');
     if (!enabled) throw new Error('Daemon did not report manual mode as enabled.');
 
+    await setIdleInhibit(client, true, IDLE_INHIBIT_TIMEOUT_MS);
+    const inhibited = await requestIdleInhibitStatus(client, 'Post-enable idle inhibit status');
+    if (!inhibited) throw new Error('Daemon did not report idle inhibit as enabled.');
+
     await setRainbow(client);
     console.log(`Rainbow effect running for ${RAINBOW_DURATION_MS / 1000} seconds...`);
     await sleep(RAINBOW_DURATION_MS);
 
+    await fadeOut(client, FADE_OUT_DURATION_MS);
+
     await setManualMode(client, false);
-    console.log('Manual mode disabled; disconnecting.');
+    await setIdleInhibit(client, false);
+    console.log('Manual mode and idle inhibit disabled; disconnecting.');
   } finally {
     client.cancel();
   }

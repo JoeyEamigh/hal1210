@@ -8,20 +8,30 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any, cast
 
-from pyhal1210client import Hal1210Client
+from pyhal1210client import Hal1210Client, SetIdleInhibitMessage
 
 if TYPE_CHECKING:
-    from pyhal1210client import ManualModeMessage, MessageToClient, MessageToServerData, NackMessage
+    from pyhal1210client import (
+        IdleInhibitMessage,
+        ManualModeMessage,
+        MessageToClient,
+        MessageToServerData,
+        NackMessage,
+    )
 else:  # pragma: no cover - runtime only
+    IdleInhibitMessage = Any  # type: ignore[assignment]
     ManualModeMessage = Any  # type: ignore[assignment]
     MessageToClient = Any
     MessageToServerData = Any
     NackMessage = Any  # type: ignore[assignment]
 
 GET_MANUAL_MODE: MessageToServerData = {"type": "getManualMode"}
+GET_IDLE_INHIBIT: MessageToServerData = {"type": "getIdleInhibit"}
 RAINBOW_COMMAND: MessageToServerData = {"type": "led", "data": {"command": "rainbow"}}
 TIMEOUT_SECONDS = 2.0
 RAINBOW_DURATION_SECONDS = 10.0
+IDLE_INHIBIT_TIMEOUT_MS = 15_000
+FADE_OUT_DURATION_MS = 3_000
 
 
 async def wait_for_next_message(client: Hal1210Client, timeout: float) -> MessageToClient:
@@ -98,7 +108,41 @@ async def start_rainbow_effect(client: Hal1210Client) -> None:
     await wait_for_ack(client, message_id)
 
 
+async def fade_out(client: Hal1210Client, duration_ms: int) -> None:
+    payload: MessageToServerData = {
+        "type": "led",
+        "data": {"command": "fadeOut", "args": {"durationMs": duration_ms}},
+    }
+    message_id = client.send(payload)
+    print(f"Sent fade out ({duration_ms} ms) (message id: {message_id}).")
+    await wait_for_ack(client, message_id)
+
+
+async def request_idle_inhibit_status(client: Hal1210Client, label: str) -> bool:
+    message_id = client.send(GET_IDLE_INHIBIT)
+    print(f"Sent idle inhibit request ({label}) (message id: {message_id})")
+    response = cast(IdleInhibitMessage, await wait_for_type(client, "idleInhibit", TIMEOUT_SECONDS))
+    enabled = bool(response["data"]["enabled"])
+    timeout_ms = response["data"].get("timeoutMs")
+    state = "ENABLED" if enabled else "DISABLED"
+    timeout_label = f" (timeout {timeout_ms} ms)" if timeout_ms is not None else ""
+    print(f"{label}: daemon reports idle inhibit {state}{timeout_label}.")
+    return enabled
+
+
+async def set_idle_inhibit(client: Hal1210Client, enabled: bool, timeout_ms: int | None = None) -> None:
+    data: dict[str, object] = {"enabled": enabled}
+    if timeout_ms is not None:
+        data["timeoutMs"] = timeout_ms
+    payload: MessageToServerData = cast(SetIdleInhibitMessage, {"type": "setIdleInhibit", "data": data})
+    message_id = client.send(payload)
+    timeout_label = f", timeout {timeout_ms} ms" if timeout_ms is not None else ""
+    print(f"Sent {'enable' if enabled else 'disable'} idle inhibit request (message id: {message_id}{timeout_label}).")
+    await wait_for_ack(client, message_id)
+
+
 async def run_manual_mode_workflow(client: Hal1210Client) -> None:
+    await request_idle_inhibit_status(client, "Initial idle inhibit status")
     await request_manual_mode_status(client, "Initial status")
 
     await set_manual_mode(client, True)
@@ -106,12 +150,20 @@ async def run_manual_mode_workflow(client: Hal1210Client) -> None:
     if not enabled:
         raise RuntimeError("Daemon did not report manual mode as enabled.")
 
+    await set_idle_inhibit(client, True, timeout_ms=IDLE_INHIBIT_TIMEOUT_MS)
+    inhibited = await request_idle_inhibit_status(client, "Post-enable idle inhibit status")
+    if not inhibited:
+        raise RuntimeError("Daemon did not report idle inhibit as enabled.")
+
     await start_rainbow_effect(client)
     print(f"Rainbow effect running for {RAINBOW_DURATION_SECONDS:.0f} seconds...")
     await asyncio.sleep(RAINBOW_DURATION_SECONDS)
 
+    await fade_out(client, FADE_OUT_DURATION_MS)
+
     await set_manual_mode(client, False)
-    print("Manual mode disabled; disconnecting.")
+    await set_idle_inhibit(client, False)
+    print("Manual mode and idle inhibit disabled; disconnecting.")
 
 
 async def main() -> None:

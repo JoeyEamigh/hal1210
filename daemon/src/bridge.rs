@@ -5,14 +5,14 @@ use std::{
     atomic::{AtomicBool, Ordering},
     Arc,
   },
-  time::Instant,
+  time::{Duration, Instant},
 };
 
 use daemoncomm::{
   LedCommand, LedStripState, MessageToClient, MessageToClientData, MessageToServer, MessageToServerData,
 };
 use ledcomm::BYTES_PER_LED;
-use tokio::{sync::oneshot, task::JoinHandle};
+use tokio::{sync::oneshot, task::JoinHandle, time};
 
 use crate::{
   client::{
@@ -26,6 +26,8 @@ use uuid::Uuid;
 
 type FrameStageTx = tokio::sync::mpsc::UnboundedSender<FrameStage>;
 type FrameStageRx = tokio::sync::mpsc::UnboundedReceiver<FrameStage>;
+type IdleTimeoutTx = tokio::sync::mpsc::UnboundedSender<()>;
+type IdleTimeoutRx = tokio::sync::mpsc::UnboundedReceiver<()>;
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
@@ -45,9 +47,16 @@ pub struct Handler {
   led_rx: led::EventRx,
   client_man_tx: client::ServerResTx,
   client_man_rx: client::ClientReqRx,
+  idle_timeout_tx: IdleTimeoutTx,
+  idle_timeout_rx: IdleTimeoutRx,
 
   // state
   idle: bool,
+  seat_idle: bool,
+  idle_inhibit: bool,
+  idle_inhibit_requested_timeout: Option<u64>,
+  idle_inhibit_deadline: Option<Instant>,
+  idle_inhibit_task: Option<JoinHandle<()>>,
   clients: ClientSessions,
   manual_flag: Arc<AtomicBool>,
   pending_fade_in: bool,
@@ -82,6 +91,7 @@ impl Handler {
     cancel_token: tokio_util::sync::CancellationToken,
   ) -> Self {
     let (frame_stage_tx, frame_stage_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (idle_timeout_tx, idle_timeout_rx) = tokio::sync::mpsc::unbounded_channel();
 
     Self {
       compute,
@@ -92,8 +102,15 @@ impl Handler {
       led_rx,
       client_man_tx,
       client_man_rx,
+      idle_timeout_tx,
+      idle_timeout_rx,
 
       idle: false,
+      seat_idle: false,
+      idle_inhibit: false,
+      idle_inhibit_requested_timeout: None,
+      idle_inhibit_deadline: None,
+      idle_inhibit_task: None,
       clients: ClientSessions::new(),
       manual_flag: Arc::new(AtomicBool::new(false)),
       pending_fade_in: false,
@@ -115,26 +132,12 @@ impl Handler {
     match event {
       wayland::Event::Idle(idle_state) => match idle_state {
         IdleEvent::Idle => {
-          self.idle = true;
-
-          if self.clients.manual_enabled() {
-            tracing::trace!("manual mode active; suppressing idle fade out");
-          } else {
-            tracing::debug!("turning off leds since seat is idle");
-            self.send_led_command(LedCommand::FadeOut);
-          }
+          self.seat_idle = true;
+          self.update_effective_idle_state();
         }
         IdleEvent::Active => {
-          self.idle = false;
-          if self.clients.manual_enabled() {
-            self.manual_started_while_idle = false;
-          } else {
-            self.pending_fade_in = true;
-          }
-          tracing::debug!("seat is active again, restarting frame loop");
-          if let Err(err) = self.wayland_tx.send(wayland::Command::ComputeDone) {
-            tracing::error!("failed to restart frame loop: {}", err);
-          }
+          self.seat_idle = false;
+          self.update_effective_idle_state();
         }
       },
       wayland::Event::DmabufCreated(dmabuf) => {
@@ -245,6 +248,13 @@ impl Handler {
         self.send_manual_state(addr, msg.id, self.clients.manual_enabled());
         self.ack(addr, msg.id);
       }
+      MessageToServerData::SetIdleInhibit { enabled, timeout_ms } => {
+        self.handle_idle_inhibit_request(addr, msg.id, enabled, timeout_ms);
+      }
+      MessageToServerData::GetIdleInhibit => {
+        self.send_idle_inhibit_state(addr, msg.id, self.idle_inhibit, self.remaining_idle_inhibit_ms());
+        self.ack(addr, msg.id);
+      }
     }
   }
 
@@ -268,6 +278,10 @@ impl Handler {
           tracing::trace!("received event from wayland: {:?}", event);
           self.handle_wayland_event(event).await;
         }
+        Some(()) = self.idle_timeout_rx.recv() => {
+          tracing::trace!("idle inhibit timer fired");
+          self.on_idle_inhibit_timeout();
+        }
         _ = monitoring::wait_for_signal() => {
           tracing::info!("shutdown signal received, stopping...");
           break;
@@ -275,6 +289,7 @@ impl Handler {
       }
     }
 
+    self.cancel_idle_inhibit_timer();
     self.cancel_token.cancel();
     self.loop_signal.stop();
     self.compute.wait_for_idle();
@@ -331,6 +346,100 @@ impl Handler {
     self.ack(addr, id);
   }
 
+  fn handle_idle_inhibit_request(&mut self, addr: SocketAddr, id: Uuid, enabled: bool, timeout_ms: Option<u64>) {
+    let changed = self.apply_idle_inhibit_state(enabled, timeout_ms);
+
+    if changed {
+      tracing::info!(addr = %addr, enabled, timeout_ms, "idle inhibit updated via client request");
+    } else {
+      tracing::debug!(addr = %addr, enabled, timeout_ms, "idle inhibit already in requested state");
+    }
+
+    let remaining = self.remaining_idle_inhibit_ms();
+    self.send_idle_inhibit_state(addr, id, self.idle_inhibit, remaining);
+    self.ack(addr, id);
+  }
+
+  fn apply_idle_inhibit_state(&mut self, enabled: bool, timeout_ms: Option<u64>) -> bool {
+    let prev_enabled = self.idle_inhibit;
+    let prev_timeout = self.idle_inhibit_requested_timeout;
+
+    if enabled {
+      self.idle_inhibit_requested_timeout = timeout_ms;
+      if let Some(ms) = timeout_ms {
+        self.start_idle_inhibit_timer(ms);
+      } else {
+        self.cancel_idle_inhibit_timer();
+        self.idle_inhibit_deadline = None;
+      }
+    } else {
+      self.idle_inhibit_requested_timeout = None;
+      self.idle_inhibit_deadline = None;
+      self.cancel_idle_inhibit_timer();
+    }
+
+    self.idle_inhibit = enabled;
+    self.update_effective_idle_state();
+
+    prev_enabled != enabled || (enabled && prev_timeout != timeout_ms)
+  }
+
+  fn remaining_idle_inhibit_ms(&self) -> Option<u64> {
+    if !self.idle_inhibit {
+      return None;
+    }
+
+    self
+      .idle_inhibit_deadline
+      .map(|deadline| deadline.saturating_duration_since(Instant::now()).as_millis() as u64)
+  }
+
+  fn start_idle_inhibit_timer(&mut self, duration_ms: u64) {
+    self.cancel_idle_inhibit_timer();
+
+    if duration_ms == 0 {
+      self.idle_inhibit_deadline = Some(Instant::now());
+      if let Err(err) = self.idle_timeout_tx.send(()) {
+        tracing::error!("failed to dispatch immediate idle inhibit timeout: {}", err);
+      }
+      return;
+    }
+
+    let tx = self.idle_timeout_tx.clone();
+    let cancel = self.cancel_token.child_token();
+    let duration = Duration::from_millis(duration_ms);
+    let handle = tokio::spawn(async move {
+      tokio::select! {
+        _ = time::sleep(duration) => {
+          let _ = tx.send(());
+        }
+        _ = cancel.cancelled() => {}
+      }
+    });
+
+    self.idle_inhibit_task = Some(handle);
+    self.idle_inhibit_deadline = Some(Instant::now() + duration);
+  }
+
+  fn cancel_idle_inhibit_timer(&mut self) {
+    if let Some(handle) = self.idle_inhibit_task.take() {
+      handle.abort();
+    }
+  }
+
+  fn on_idle_inhibit_timeout(&mut self) {
+    self.idle_inhibit_task = None;
+    if !self.idle_inhibit {
+      return;
+    }
+
+    tracing::info!("idle inhibit timeout expired; disabling idle inhibit");
+    self.idle_inhibit = false;
+    self.idle_inhibit_requested_timeout = None;
+    self.idle_inhibit_deadline = None;
+    self.update_effective_idle_state();
+  }
+
   fn on_manual_state_changed(&mut self, enabled: bool) {
     self.manual_flag.store(enabled, Ordering::Release);
     if enabled {
@@ -344,11 +453,11 @@ impl Handler {
       self.pending_fade_in = true;
       if self.manual_started_while_idle {
         tracing::debug!("manual mode disabled while idle; fading out without restoring frame");
-        self.send_led_command(LedCommand::FadeOut);
+        self.send_led_command(LedCommand::FadeOut { duration_ms: None });
       } else {
         tracing::debug!("manual mode disabled while idle; restoring last frame before fade out");
         self.send_led_command(LedCommand::SetStripState(self.last_auto_frame));
-        self.send_led_command(LedCommand::FadeOut);
+        self.send_led_command(LedCommand::FadeOut { duration_ms: None });
       }
     } else {
       tracing::debug!("manual mode disabled; resuming automatic frame dispatch");
@@ -368,6 +477,10 @@ impl Handler {
 
   fn send_manual_state(&self, addr: SocketAddr, id: Uuid, enabled: bool) {
     self.send_reply(addr, id, MessageToClientData::ManualMode { enabled });
+  }
+
+  fn send_idle_inhibit_state(&self, addr: SocketAddr, id: Uuid, enabled: bool, timeout_ms: Option<u64>) {
+    self.send_reply(addr, id, MessageToClientData::IdleInhibit { enabled, timeout_ms });
   }
 
   fn ack(&self, addr: SocketAddr, id: Uuid) {
@@ -394,6 +507,50 @@ impl Handler {
   fn process_manual_led_command(&self, command: LedCommand) {
     tracing::debug!(?command, "forwarding manual LED command to manager");
     self.send_led_command(command);
+  }
+
+  fn update_effective_idle_state(&mut self) {
+    let effective_idle = self.seat_idle && !self.idle_inhibit;
+
+    if effective_idle {
+      if !self.idle {
+        self.idle = true;
+        self.on_enter_idle();
+      }
+      return;
+    }
+
+    if self.seat_idle && self.idle_inhibit {
+      tracing::debug!("idle inhibit active; suppressing idle fade out");
+    }
+
+    if self.idle {
+      self.idle = false;
+      self.on_exit_idle();
+    }
+  }
+
+  fn on_enter_idle(&mut self) {
+    tracing::debug!("effective idle detected; pausing frame pipeline");
+    if self.clients.manual_enabled() {
+      tracing::trace!("manual mode active; suppressing idle fade out");
+    } else {
+      tracing::debug!("turning off leds since seat is idle");
+      self.send_led_command(LedCommand::FadeOut { duration_ms: None });
+    }
+  }
+
+  fn on_exit_idle(&mut self) {
+    if self.clients.manual_enabled() {
+      self.manual_started_while_idle = false;
+    } else {
+      self.pending_fade_in = true;
+    }
+
+    tracing::debug!("effective idle cleared; restarting frame loop");
+    if let Err(err) = self.wayland_tx.send(wayland::Command::ComputeDone) {
+      tracing::error!("failed to restart frame loop: {}", err);
+    }
   }
 
   fn handle_frame_stage(&mut self, stage: FrameStage) {
@@ -497,7 +654,10 @@ async fn await_compute_dispatch(
           });
 
           let command = if fade_in {
-            LedCommand::FadeIn(strip_state)
+            LedCommand::FadeIn {
+              state: strip_state,
+              duration_ms: None,
+            }
           } else {
             LedCommand::SetStripState(strip_state)
           };

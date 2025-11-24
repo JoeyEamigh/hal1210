@@ -21,8 +21,13 @@ pub type LedStripState = ledcomm::StateFrame;
 pub enum LedCommand {
   SetStaticColor(Color),
   SetStripState(LedStripState),
-  FadeIn(LedStripState),
-  FadeOut,
+  FadeIn {
+    state: LedStripState,
+    duration_ms: Option<u64>,
+  },
+  FadeOut {
+    duration_ms: Option<u64>,
+  },
   Rainbow,
   Breathing(Color),
 }
@@ -39,8 +44,17 @@ pub struct MessageToClient {
 #[serde(tag = "type", content = "data", rename_all = "camelCase")]
 pub enum MessageToClientData {
   Ack,
-  Nack { reason: String },
-  ManualMode { enabled: bool },
+  Nack {
+    reason: String,
+  },
+  ManualMode {
+    enabled: bool,
+  },
+  IdleInhibit {
+    enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timeout_ms: Option<u64>,
+  },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +70,14 @@ pub struct MessageToServer {
 #[serde(tag = "type", content = "data", rename_all = "camelCase")]
 pub enum MessageToServerData {
   Led(LedCommand),
-  SetManualMode { enabled: bool },
+  SetManualMode {
+    enabled: bool,
+  },
   GetManualMode,
+  SetIdleInhibit {
+    enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timeout_ms: Option<u64>,
+  },
+  GetIdleInhibit,
 }

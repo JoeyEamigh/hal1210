@@ -27,6 +27,7 @@ const LOG_HEIGHT: u16 = 9;
 const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const LOG_CAPACITY: usize = 200;
 const LOG_VISIBLE_LINES: usize = (LOG_HEIGHT as usize).saturating_sub(2);
+const DEFAULT_FADE_OUT_DURATION_MS: u64 = 3_000;
 
 fn main() -> Result<()> {
   monitoring::init_logger();
@@ -45,8 +46,11 @@ pub struct App {
   client: Option<Hal1210Client>,
   incoming: mpsc::UnboundedReceiver<MessageToClient>,
   manual_state: ManualModeState,
+  idle_inhibit_state: IdleInhibitState,
   selected_command: usize,
   color_input: ColorInput,
+  idle_timeout_input: DurationInput,
+  fade_out_duration_input: DurationInput,
   logs: VecDeque<String>,
   pending: HashMap<Uuid, String>,
 }
@@ -69,8 +73,11 @@ impl App {
       client: Some(client),
       incoming: incoming_rx,
       manual_state: ManualModeState::Unknown,
+      idle_inhibit_state: IdleInhibitState::Unknown,
       selected_command: 0,
       color_input: ColorInput::new(),
+      idle_timeout_input: DurationInput::new("Idle inhibit timeout", None),
+      fade_out_duration_input: DurationInput::new("Fade out duration", Some(DEFAULT_FADE_OUT_DURATION_MS)),
       logs: VecDeque::with_capacity(LOG_CAPACITY),
       pending: HashMap::new(),
     };
@@ -123,13 +130,21 @@ impl App {
 
   fn render_header(&self, frame: &mut Frame, area: Rect) {
     let (status_label, status_style) = self.manual_state.label_and_style();
+    let (idle_label, idle_style) = self.idle_inhibit_state.label_and_style();
+    let idle_timeout = self.idle_timeout_input.formatted();
     let lines = vec![
       Line::from(vec![
         Span::styled("Manual mode: ", Style::default().add_modifier(Modifier::BOLD)),
         Span::styled(status_label, status_style),
       ]),
+      Line::from(vec![
+        Span::styled("Idle inhibit: ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(idle_label, idle_style),
+        Span::raw(" · timeout: "),
+        Span::styled(idle_timeout, Style::default().fg(TuiColor::Gray)),
+      ]),
       Line::from(format!("Pending requests: {}", self.pending.len())),
-      Line::from("Press Enter to send · 'm' toggles manual mode · Esc/q exits"),
+      Line::from("Press Enter to send · 'm' toggles manual mode · 'i' toggles idle inhibit · Esc/q exits"),
     ];
 
     frame.render_widget(
@@ -218,13 +233,38 @@ impl App {
       }
     }
 
+    if let Some(field) = descriptor.duration_field() {
+      let input = self.duration_input(field);
+      let value_style = if input.value().is_some() {
+        Style::default().fg(TuiColor::LightCyan)
+      } else {
+        Style::default().fg(TuiColor::Gray)
+      };
+      lines.push(Line::from(vec![
+        Span::styled(format!("{}: ", input.label()), Style::default().fg(TuiColor::Gray)),
+        Span::styled(input.formatted(), value_style),
+      ]));
+
+      if input.is_editing() {
+        lines.push(Line::from(
+          "Editing duration — type digits, Backspace to delete, Enter to confirm.",
+        ));
+      } else {
+        lines.push(Line::from(
+          "Press 't' to edit duration · Leave blank to send no override.",
+        ));
+      }
+    }
+
     if descriptor.supported {
       lines.push(Line::from("Press Enter to send the highlighted message."));
     } else {
       lines.push(Line::from("Selection is informational only."));
     }
 
-    lines.push(Line::from("Arrow keys move selection · 'm' toggles manual mode."));
+    lines.push(Line::from(
+      "Arrow keys move selection · 'm' toggles manual mode · 'i' toggles idle inhibit · 't' edits duration when available.",
+    ));
 
     frame.render_widget(
       Paragraph::new(lines)
@@ -264,8 +304,26 @@ impl App {
     COMMANDS.get(self.selected_command).unwrap_or_else(|| &COMMANDS[0])
   }
 
+  fn duration_input(&self, field: DurationField) -> &DurationInput {
+    match field {
+      DurationField::IdleInhibit => &self.idle_timeout_input,
+      DurationField::FadeOut => &self.fade_out_duration_input,
+    }
+  }
+
+  fn duration_input_mut(&mut self, field: DurationField) -> &mut DurationInput {
+    match field {
+      DurationField::IdleInhibit => &mut self.idle_timeout_input,
+      DurationField::FadeOut => &mut self.fade_out_duration_input,
+    }
+  }
+
   fn on_key_event(&mut self, key: KeyEvent) {
     if self.color_input.handle_key(key) {
+      return;
+    }
+
+    if self.handle_duration_input_key(key) {
       return;
     }
 
@@ -297,13 +355,53 @@ impl App {
           self.push_error(err.to_string());
         }
       }
+      (_, KeyCode::Char('i')) => {
+        if matches!(
+          self.idle_inhibit_state,
+          IdleInhibitState::PendingEnable | IdleInhibitState::PendingDisable
+        ) {
+          return;
+        }
+
+        let disable = matches!(self.idle_inhibit_state, IdleInhibitState::Enabled);
+        if disable {
+          if let Err(err) = self.request_idle_inhibit(false, None) {
+            self.push_error(err.to_string());
+          }
+        } else {
+          let timeout = self.idle_timeout_input.value();
+          if let Err(err) = self.request_idle_inhibit(true, timeout) {
+            self.push_error(err.to_string());
+          }
+        }
+      }
       (_, KeyCode::Char('e')) => {
         if self.selected_descriptor().needs_color() {
           self.color_input.toggle_editing();
         }
       }
+      (_, KeyCode::Char('t')) => {
+        if let Some(field) = self.selected_descriptor().duration_field() {
+          match field {
+            DurationField::IdleInhibit => self.fade_out_duration_input.stop_editing(),
+            DurationField::FadeOut => self.idle_timeout_input.stop_editing(),
+          }
+          self.duration_input_mut(field).toggle_editing();
+        }
+      }
       _ => {}
     }
+  }
+
+  fn handle_duration_input_key(&mut self, key: KeyEvent) -> bool {
+    let mut handled = false;
+    if self.idle_timeout_input.is_editing() {
+      handled |= self.idle_timeout_input.handle_key(key);
+    }
+    if self.fade_out_duration_input.is_editing() {
+      handled |= self.fade_out_duration_input.handle_key(key);
+    }
+    handled
   }
 
   fn send_selected_command(&mut self) {
@@ -317,6 +415,15 @@ impl App {
       CommandKind::GetManualMode => self.send_or_log("Get manual mode", MessageToServerData::GetManualMode),
       CommandKind::Manual(enabled) => {
         if let Err(err) = self.request_manual_mode(enabled) {
+          self.push_error(err.to_string());
+        }
+      }
+      CommandKind::GetIdleInhibit => {
+        self.send_or_log("Get idle inhibit", MessageToServerData::GetIdleInhibit);
+      }
+      CommandKind::IdleInhibit(enabled) => {
+        let timeout = if enabled { self.idle_timeout_input.value() } else { None };
+        if let Err(err) = self.request_idle_inhibit(enabled, timeout) {
           self.push_error(err.to_string());
         }
       }
@@ -341,7 +448,11 @@ impl App {
         }
       }
       CommandKind::Led(LedCommandKind::FadeOut) => {
-        self.send_or_log("Fade out", MessageToServerData::Led(LedCommand::FadeOut));
+        let duration_ms = self.fade_out_duration_input.value();
+        self.send_or_log(
+          "Fade out",
+          MessageToServerData::Led(LedCommand::FadeOut { duration_ms }),
+        );
       }
       CommandKind::Led(LedCommandKind::Rainbow) => {
         self.send_or_log("Rainbow", MessageToServerData::Led(LedCommand::Rainbow));
@@ -394,6 +505,21 @@ impl App {
     Ok(())
   }
 
+  fn request_idle_inhibit(&mut self, enabled: bool, timeout_ms: Option<u64>) -> Result<()> {
+    let label = if enabled {
+      "Enable idle inhibit"
+    } else {
+      "Disable idle inhibit"
+    };
+    self.try_send(label, MessageToServerData::SetIdleInhibit { enabled, timeout_ms })?;
+    self.idle_inhibit_state = if enabled {
+      IdleInhibitState::PendingEnable
+    } else {
+      IdleInhibitState::PendingDisable
+    };
+    Ok(())
+  }
+
   fn drain_incoming(&mut self) {
     loop {
       match self.incoming.try_recv() {
@@ -435,6 +561,21 @@ impl App {
           if enabled { "enabled" } else { "disabled" }
         ));
       }
+      MessageToClientData::IdleInhibit { enabled, timeout_ms } => {
+        self.idle_inhibit_state = if enabled {
+          IdleInhibitState::Enabled
+        } else {
+          IdleInhibitState::Disabled
+        };
+        let mut message = format!(
+          "daemon reports idle inhibit {}",
+          if enabled { "enabled" } else { "disabled" }
+        );
+        if let Some(ms) = timeout_ms {
+          message.push_str(&format!(" (timeout: {ms} ms)"));
+        }
+        self.push_log(message);
+      }
     }
   }
 
@@ -461,10 +602,18 @@ impl App {
       ManualModeState::Enabled | ManualModeState::PendingEnable | ManualModeState::PendingDisable
     );
 
-    if should_disable
-      && let Err(err) = self.request_manual_mode(false) {
-        self.push_error(format!("failed to disable manual mode: {err}"));
-      }
+    if should_disable && let Err(err) = self.request_manual_mode(false) {
+      self.push_error(format!("failed to disable manual mode: {err}"));
+    }
+
+    let should_clear_idle = matches!(
+      self.idle_inhibit_state,
+      IdleInhibitState::Enabled | IdleInhibitState::PendingEnable | IdleInhibitState::PendingDisable
+    );
+
+    if should_clear_idle && let Err(err) = self.request_idle_inhibit(false, None) {
+      self.push_error(format!("failed to disable idle inhibit: {err}"));
+    }
     if let Some(client) = self.client.take() {
       client.cancel();
     }
@@ -488,6 +637,27 @@ impl ManualModeState {
       ManualModeState::PendingDisable => ("releasing control", Style::default().fg(TuiColor::LightYellow)),
       ManualModeState::Enabled => ("enabled", Style::default().fg(TuiColor::Green)),
       ManualModeState::Disabled => ("disabled", Style::default().fg(TuiColor::Red)),
+    }
+  }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum IdleInhibitState {
+  Unknown,
+  PendingEnable,
+  PendingDisable,
+  Enabled,
+  Disabled,
+}
+
+impl IdleInhibitState {
+  fn label_and_style(self) -> (&'static str, Style) {
+    match self {
+      IdleInhibitState::Unknown => ("unknown", Style::default().fg(TuiColor::Yellow)),
+      IdleInhibitState::PendingEnable => ("enabling", Style::default().fg(TuiColor::LightYellow)),
+      IdleInhibitState::PendingDisable => ("disabling", Style::default().fg(TuiColor::LightYellow)),
+      IdleInhibitState::Enabled => ("enabled", Style::default().fg(TuiColor::Green)),
+      IdleInhibitState::Disabled => ("disabled", Style::default().fg(TuiColor::Red)),
     }
   }
 }
@@ -555,12 +725,87 @@ impl ColorInput {
   }
 }
 
+struct DurationInput {
+  label: &'static str,
+  buffer: String,
+  editing: bool,
+  max_digits: usize,
+}
+
+impl DurationInput {
+  fn new(label: &'static str, default_ms: Option<u64>) -> Self {
+    Self {
+      label,
+      buffer: default_ms.map(|value| value.to_string()).unwrap_or_default(),
+      editing: false,
+      max_digits: 9,
+    }
+  }
+
+  fn formatted(&self) -> String {
+    if self.buffer.is_empty() {
+      "none".to_string()
+    } else {
+      format!("{} ms", self.buffer)
+    }
+  }
+
+  fn value(&self) -> Option<u64> {
+    if self.buffer.is_empty() {
+      None
+    } else {
+      self.buffer.parse().ok()
+    }
+  }
+
+  fn toggle_editing(&mut self) {
+    self.editing = !self.editing;
+  }
+
+  fn stop_editing(&mut self) {
+    self.editing = false;
+  }
+
+  fn label(&self) -> &'static str {
+    self.label
+  }
+
+  fn is_editing(&self) -> bool {
+    self.editing
+  }
+
+  fn handle_key(&mut self, key: KeyEvent) -> bool {
+    if !self.editing {
+      return false;
+    }
+
+    match key.code {
+      KeyCode::Enter | KeyCode::Esc => {
+        self.editing = false;
+        true
+      }
+      KeyCode::Backspace => {
+        self.buffer.pop();
+        true
+      }
+      KeyCode::Char(ch) if ch.is_ascii_digit() => {
+        if self.buffer.len() < self.max_digits {
+          self.buffer.push(ch);
+        }
+        true
+      }
+      _ => true,
+    }
+  }
+}
+
 #[derive(Clone, Copy)]
 struct CommandDescriptor {
   label: &'static str,
   description: &'static str,
   kind: CommandKind,
   supported: bool,
+  duration: Option<DurationField>,
 }
 
 impl CommandDescriptor {
@@ -570,12 +815,18 @@ impl CommandDescriptor {
       CommandKind::Led(LedCommandKind::SetStaticColor | LedCommandKind::Breathing)
     )
   }
+
+  const fn duration_field(&self) -> Option<DurationField> {
+    self.duration
+  }
 }
 
 #[derive(Clone, Copy)]
 enum CommandKind {
   GetManualMode,
   Manual(bool),
+  GetIdleInhibit,
+  IdleInhibit(bool),
   Led(LedCommandKind),
 }
 
@@ -589,59 +840,95 @@ enum LedCommandKind {
   Breathing,
 }
 
+#[derive(Clone, Copy)]
+enum DurationField {
+  IdleInhibit,
+  FadeOut,
+}
+
 const COMMANDS: &[CommandDescriptor] = &[
   CommandDescriptor {
     label: "Get manual mode",
     description: "Request the daemon's view of manual mode.",
     kind: CommandKind::GetManualMode,
     supported: true,
+    duration: None,
   },
   CommandDescriptor {
     label: "Enable manual mode",
     description: "Ask the daemon to cede LED control to this console.",
     kind: CommandKind::Manual(true),
     supported: true,
+    duration: None,
   },
   CommandDescriptor {
     label: "Disable manual mode",
     description: "Cede control back to the daemon.",
     kind: CommandKind::Manual(false),
     supported: true,
+    duration: None,
+  },
+  CommandDescriptor {
+    label: "Get idle inhibit",
+    description: "Request the daemon's view of idle inhibit state.",
+    kind: CommandKind::GetIdleInhibit,
+    supported: true,
+    duration: None,
+  },
+  CommandDescriptor {
+    label: "Enable idle inhibit",
+    description: "Prevent idle events from fading the LEDs.",
+    kind: CommandKind::IdleInhibit(true),
+    supported: true,
+    duration: Some(DurationField::IdleInhibit),
+  },
+  CommandDescriptor {
+    label: "Disable idle inhibit",
+    description: "Allow the daemon to fade out when idle again.",
+    kind: CommandKind::IdleInhibit(false),
+    supported: true,
+    duration: None,
   },
   CommandDescriptor {
     label: "Set static color",
     description: "Fill every LED with the specified #RRGGBB color.",
     kind: CommandKind::Led(LedCommandKind::SetStaticColor),
     supported: true,
+    duration: None,
   },
   CommandDescriptor {
     label: "Breathing effect",
     description: "Pulse the selected color at the configured brightness envelope.",
     kind: CommandKind::Led(LedCommandKind::Breathing),
     supported: true,
+    duration: None,
   },
   CommandDescriptor {
     label: "Fade out",
     description: "Quickly fade all LEDs to black.",
     kind: CommandKind::Led(LedCommandKind::FadeOut),
     supported: true,
+    duration: Some(DurationField::FadeOut),
   },
   CommandDescriptor {
     label: "Rainbow",
     description: "Start the rainbow animation shipped with the daemon.",
     kind: CommandKind::Led(LedCommandKind::Rainbow),
     supported: true,
+    duration: None,
   },
   CommandDescriptor {
     label: "Set strip state (full frame)",
     description: "Upload a custom LED frame. Not yet supported in this UI.",
     kind: CommandKind::Led(LedCommandKind::SetStripState),
     supported: false,
+    duration: None,
   },
   CommandDescriptor {
     label: "Fade in frame (full frame)",
     description: "Fade into a provided LED frame. Not yet supported in this UI.",
     kind: CommandKind::Led(LedCommandKind::FadeIn),
     supported: false,
+    duration: None,
   },
 ];

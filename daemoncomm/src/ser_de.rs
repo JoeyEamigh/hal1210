@@ -1,4 +1,5 @@
 use serde::de::Error as DeError;
+use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use ledcomm::{BYTES_PER_LED, NUM_LEDS};
@@ -10,37 +11,64 @@ impl Serialize for LedCommand {
   where
     S: Serializer,
   {
-    #[derive(Serialize)]
-    #[serde(tag = "command", content = "args", rename_all = "camelCase")]
-    enum Helper<'a> {
-      SetStaticColor(&'a Color),
-      SetStripState(&'a serde_bytes::Bytes),
-      FadeIn(&'a serde_bytes::Bytes),
-      FadeOut,
-      Rainbow,
-      Breathing(&'a Color),
-    }
-
-    let encode_frame = |frame: &ledcomm::StateFrame| {
-      let bytes: &[u8] = unsafe { core::slice::from_raw_parts(frame.as_ptr() as *const u8, NUM_LEDS * BYTES_PER_LED) };
-      serde_bytes::Bytes::new(bytes)
-    };
-
+    let mut map = serializer.serialize_map(None)?;
     match self {
-      LedCommand::SetStaticColor(color) => Helper::SetStaticColor(color).serialize(serializer),
+      LedCommand::SetStaticColor(color) => {
+        map.serialize_entry("command", "setStaticColor")?;
+        map.serialize_entry("args", color)?;
+      }
       LedCommand::SetStripState(frame) => {
+        map.serialize_entry("command", "setStripState")?;
         let encoded = encode_frame(frame);
-        Helper::SetStripState(encoded).serialize(serializer)
+        map.serialize_entry("args", &encoded)?;
       }
-      LedCommand::FadeIn(frame) => {
-        let encoded = encode_frame(frame);
-        Helper::FadeIn(encoded).serialize(serializer)
+      LedCommand::FadeIn { state, duration_ms } => {
+        map.serialize_entry("command", "fadeIn")?;
+        let encoded = encode_frame(state);
+        let args = FadeInArgsSer {
+          state: encoded,
+          duration_ms,
+        };
+        map.serialize_entry("args", &args)?;
       }
-      LedCommand::FadeOut => Helper::FadeOut.serialize(serializer),
-      LedCommand::Rainbow => Helper::Rainbow.serialize(serializer),
-      LedCommand::Breathing(color) => Helper::Breathing(color).serialize(serializer),
+      LedCommand::FadeOut { duration_ms } => {
+        map.serialize_entry("command", "fadeOut")?;
+        if duration_ms.is_some() {
+          let args = FadeOutArgsSer { duration_ms };
+          map.serialize_entry("args", &args)?;
+        }
+      }
+      LedCommand::Rainbow => {
+        map.serialize_entry("command", "rainbow")?;
+      }
+      LedCommand::Breathing(color) => {
+        map.serialize_entry("command", "breathing")?;
+        map.serialize_entry("args", color)?;
+      }
     }
+
+    map.end()
   }
+}
+
+fn encode_frame(frame: &ledcomm::StateFrame) -> &serde_bytes::Bytes {
+  let bytes: &[u8] = unsafe { core::slice::from_raw_parts(frame.as_ptr() as *const u8, NUM_LEDS * BYTES_PER_LED) };
+  serde_bytes::Bytes::new(bytes)
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FadeInArgsSer<'a> {
+  state: &'a serde_bytes::Bytes,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  duration_ms: &'a Option<u64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FadeOutArgsSer<'a> {
+  #[serde(skip_serializing_if = "Option::is_none")]
+  duration_ms: &'a Option<u64>,
 }
 
 impl<'de> Deserialize<'de> for LedCommand {
@@ -53,8 +81,8 @@ impl<'de> Deserialize<'de> for LedCommand {
     enum Helper {
       SetStaticColor(Color),
       SetStripState(serde_bytes::ByteBuf),
-      FadeIn(serde_bytes::ByteBuf),
-      FadeOut,
+      FadeIn(FadeInArgsDe),
+      FadeOut(#[serde(default)] FadeOutArgsDe),
       Rainbow,
       Breathing(Color),
     }
@@ -80,10 +108,43 @@ impl<'de> Deserialize<'de> for LedCommand {
     match helper {
       Helper::SetStaticColor(color) => Ok(LedCommand::SetStaticColor(color)),
       Helper::SetStripState(encoded) => Ok(LedCommand::SetStripState(decode_frame(encoded)?)),
-      Helper::FadeIn(encoded) => Ok(LedCommand::FadeIn(decode_frame(encoded)?)),
-      Helper::FadeOut => Ok(LedCommand::FadeOut),
+      Helper::FadeIn(args) => match args {
+        FadeInArgsDe::Legacy(encoded) => Ok(LedCommand::FadeIn {
+          state: decode_frame(encoded)?,
+          duration_ms: None,
+        }),
+        FadeInArgsDe::Detailed(data) => Ok(LedCommand::FadeIn {
+          state: decode_frame(data.state)?,
+          duration_ms: data.duration_ms,
+        }),
+      },
+      Helper::FadeOut(args) => Ok(LedCommand::FadeOut {
+        duration_ms: args.duration_ms,
+      }),
       Helper::Rainbow => Ok(LedCommand::Rainbow),
       Helper::Breathing(color) => Ok(LedCommand::Breathing(color)),
     }
   }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum FadeInArgsDe {
+  Legacy(serde_bytes::ByteBuf),
+  Detailed(FadeInDetailedArgs),
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FadeInDetailedArgs {
+  state: serde_bytes::ByteBuf,
+  #[serde(default)]
+  duration_ms: Option<u64>,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct FadeOutArgsDe {
+  #[serde(default)]
+  duration_ms: Option<u64>,
 }
