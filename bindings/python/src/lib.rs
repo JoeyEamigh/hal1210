@@ -2,12 +2,12 @@
 
 use std::sync::{Arc, Mutex};
 
-use hal1210client_core::{BindingError, ClientHandle};
+use hal1210client_core::{init_tracing, BindingError, ClientHandle};
 use once_cell::sync::Lazy;
 use pyo3::{
   exceptions::{PyRuntimeError, PyTypeError},
   prelude::*,
-  types::{PyAny, PyModule, PyType},
+  types::{PyAny, PyDict, PyModule, PyType},
   Bound,
 };
 use pyo3_async_runtimes::tokio::future_into_py;
@@ -18,6 +18,7 @@ use tokio::{
   task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
+use tracing::{debug, trace};
 
 #[pyclass(name = "Hal1210Client")]
 pub struct PyHal1210Client {
@@ -28,11 +29,23 @@ pub struct PyHal1210Client {
 #[pymethods]
 impl PyHal1210Client {
   #[classmethod]
-  #[pyo3(name = "connect")]
-  fn connect_py(_cls: &Bound<'_, PyType>, py: Python<'_>) -> PyResult<Py<PyHal1210Client>> {
+  #[pyo3(name = "connect", signature = (/,**kwargs))]
+  fn connect_py(
+    _cls: &Bound<'_, PyType>,
+    kwargs: Option<&Bound<'_, PyDict>>,
+    py: Python<'_>,
+  ) -> PyResult<Py<PyHal1210Client>> {
+    let enable_tracing = kwargs
+      .and_then(|dict| dict.get_item("enable_tracing").unwrap_or(None))
+      .and_then(|obj| obj.is_truthy().ok());
+    if enable_tracing.unwrap_or(false) {
+      init_tracing();
+      debug!("pyhal1210client: tracing initialized");
+    }
     let inner = py
       .detach(|| async_runtime().block_on(ClientHandle::connect()))
       .map_err(map_py_err)?;
+    debug!("pyhal1210client: connected to daemon");
     Py::new(
       py,
       PyHal1210Client {
@@ -46,6 +59,7 @@ impl PyHal1210Client {
   fn send<'py>(&self, py: Python<'py>, message: Bound<'py, PyAny>) -> PyResult<String> {
     let payload = python_to_value(py, &message)?;
     let id = self.inner.send_json(payload).map_err(map_py_err)?;
+    trace!(%id, "pyhal1210client: dispatched message");
     Ok(id.to_string())
   }
 
@@ -54,6 +68,7 @@ impl PyHal1210Client {
     let message = py
       .detach(|| async_runtime().block_on(self.inner.next_message_json()))
       .map_err(map_py_err)?;
+    trace!("pyhal1210client: next_message returned");
     match message {
       Some(value) => json_to_py(py, value).map(Some),
       None => Ok(None),
@@ -65,6 +80,7 @@ impl PyHal1210Client {
     let handle = self.inner.clone();
     future_into_py(py, async move {
       let message = handle.next_message_json().await.map_err(map_py_err)?;
+      trace!("pyhal1210client: next_message_async resolved");
       Python::attach(|gil| -> PyResult<Py<PyAny>> {
         match message {
           Some(value) => json_to_py(gil, value),
@@ -86,7 +102,7 @@ impl PyHal1210Client {
     let stopper = cancel.clone();
     let listener_callback = stored_callback.clone_ref(py);
 
-    let handle: JoinHandle<()> = tokio::spawn(async move {
+    let handle: JoinHandle<()> = async_runtime().spawn(async move {
       loop {
         tokio::select! {
           _ = stopper.cancelled() => break,
@@ -96,6 +112,7 @@ impl PyHal1210Client {
                 match serde_json::to_value(msg) {
                   Ok(payload) => {
                     if let Err(err) = Python::attach(|gil| -> PyResult<()> {
+                      trace!("pyhal1210client: invoking on_message callback");
                       let py_value = json_to_py(gil, payload)?;
                       let callback = listener_callback.bind(gil);
                       callback.call1((py_value,))?;
@@ -129,6 +146,7 @@ impl PyHal1210Client {
   fn cancel(&self) {
     self.stop_all_listeners();
     self.inner.cancel();
+    debug!("pyhal1210client: cancel requested");
   }
 }
 

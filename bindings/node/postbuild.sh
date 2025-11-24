@@ -9,4 +9,4 @@ if [[ ! -d "$DIST_DIR" ]]; then
   exit 1
 fi
 
-cp "$REPO_ROOT/index.d.ts" "$DIST_DIR/index.d.ts"
+cat "$REPO_ROOT/stub.d.ts" >> "$DIST_DIR/index.d.ts"

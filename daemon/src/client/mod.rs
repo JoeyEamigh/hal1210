@@ -1,28 +1,39 @@
 use core::net::SocketAddr;
 use std::{collections::HashMap, io};
 
-use daemoncomm::{server::codec::Hal1210ServerCodec, MessageToClient, MessageToServer, SOCKET_ADDR};
+use daemoncomm::{
+  MessageToClient, MessageToClientData, MessageToServer, SOCKET_ADDR, server::codec::Hal1210ServerCodec,
+};
 
 use futures::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::{codec::Framed, sync::CancellationToken};
 
+pub mod session;
+
 #[derive(Debug, Clone)]
 pub struct ClientReq {
-  addr: SocketAddr,
-  msg: MessageToServer,
+  pub addr: SocketAddr,
+  pub data: ClientReqData,
 }
 
 impl ClientReq {
-  pub fn new(addr: SocketAddr, msg: MessageToServer) -> Self {
-    Self { addr, msg }
+  pub fn new(addr: SocketAddr, data: ClientReqData) -> Self {
+    Self { addr, data }
   }
+}
+
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug, Clone)]
+pub enum ClientReqData {
+  Message(MessageToServer),
+  Disconnected,
 }
 
 #[derive(Debug, Clone)]
 pub struct ServerRes {
-  addr: SocketAddr,
-  msg: MessageToClient,
+  pub addr: SocketAddr,
+  pub msg: MessageToClient,
 }
 
 impl ServerRes {
@@ -41,6 +52,7 @@ struct ClientConnEvent {
   data: ClientConnEventData,
 }
 
+#[allow(clippy::large_enum_variant)]
 enum ClientConnEventData {
   Message(MessageToServer),
   Disconnect,
@@ -63,7 +75,7 @@ struct ClientConnHandle {
   cancel: CancellationToken,
 }
 
-pub struct ComMan {
+pub struct ClientMan {
   listener: TcpListener,
 
   tx: ClientReqTx,
@@ -76,7 +88,7 @@ pub struct ComMan {
   cancel: CancellationToken,
 }
 
-impl ComMan {
+impl ClientMan {
   pub async fn init(
     client_req_tx: ClientReqTx,
     server_res_rx: ServerResRx,
@@ -136,7 +148,7 @@ impl ComMan {
           match event.data {
             ClientConnEventData::Message(msg) => {
               tracing::trace!("forwarding message from client {}: {:?}", event.addr, msg);
-              if let Err(err) = self.tx.send(ClientReq::new(event.addr, msg)) {
+              if let Err(err) = self.tx.send(ClientReq::new(event.addr, ClientReqData::Message(msg))) {
                 tracing::error!("failed to forward message from client {} to manager: {}", event.addr, err);
               }
             }
@@ -148,6 +160,10 @@ impl ComMan {
                   Ok(_) => tracing::debug!("client connection to {} exited successfully", event.addr),
                   Err(err) => tracing::error!("client connection to {} panicked: {}", event.addr, err),
                 }
+              }
+
+              if let Err(err) = self.tx.send(ClientReq::new(event.addr, ClientReqData::Disconnected)) {
+                tracing::error!("failed to forward disconnect for client {} to manager: {}", event.addr, err);
               }
             }
           }
@@ -242,6 +258,9 @@ impl ClientConn {
             }
             Some(Err(err)) => {
               tracing::error!("{}: error decoding client message: {}", self.addr, err);
+              if let Err(err) = self.stream.send(MessageToClient { id: uuid::Uuid::nil(), data: MessageToClientData::Nack { reason: "could not decode message".to_string() } }).await {
+                tracing::error!("{}: error sending message to client: {}", self.addr, err);
+              }
               continue;
             }
             None => {

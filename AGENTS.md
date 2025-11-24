@@ -1,9 +1,8 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `wayled/` contains the host binary: `src/main.rs` orchestrates Wayland capture (`src/wayland/`), Vulkan compute (`src/gpu/`), and ESP32 LED command dispatch (`src/led/`); shaders live in `wayled/shaders/` and are compiled via `build.rs`.
+- `daemon/` contains the host binary: `src/main.rs` orchestrates Wayland capture (`src/wayland/`), Vulkan compute (`src/gpu/`), and ESP32 LED command dispatch (`src/led/`); shaders live in `wayled/shaders/` and are compiled via `build.rs`.
 - `espled/` is the ESP32 firmware using esp-hal nostd; entry point is `espled/src/bin/main.rs`.
-- `ledcomm/` is a shared `no_std` crate defining the LED frame protocol used by both host and firmware.
 
 ## Development Commands
 - `cargo fmt` – run in each subcrate to format code according to Rust style guidelines.

@@ -16,7 +16,7 @@ pub fn init_logger() {
   let filter_directives = if let Ok(filter) = std::env::var("RUST_LOG") {
     filter
   } else {
-    "wayled=trace".to_string()
+    "hal1210=trace,hal1210::wayland=info,hal1210::gpu=info".to_string()
   };
 
   // directives for release builds
@@ -27,7 +27,7 @@ pub fn init_logger() {
   let filter_directives = if let Ok(filter) = std::env::var("RUST_LOG") {
     filter
   } else {
-    "wayled=info".to_string()
+    "hal1210=info".to_string()
   };
 
   let filter = EnvFilter::builder()

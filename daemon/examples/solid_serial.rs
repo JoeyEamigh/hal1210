@@ -8,7 +8,7 @@ use std::{
   time::Duration,
 };
 
-use ledcomm::{parse_write_feedback, Frame, BYTES_PER_LED, MAGIC, NUM_LEDS, WRITE_FEEDBACK_LEN};
+use ledcomm::{BYTES_PER_LED, Frame, MAGIC, NUM_LEDS, WRITE_FEEDBACK_LEN, parse_write_feedback};
 
 fn main() -> Result<(), Box<dyn Error>> {
   let port_path = env::args().nth(1).unwrap_or_else(|| "/dev/ttyACM0".to_string());

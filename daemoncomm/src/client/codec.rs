@@ -45,9 +45,8 @@ impl Encoder<MessageToServer> for Hal1210ClientCodec {
 
   fn encode(&mut self, item: MessageToServer, dst: &mut BytesMut) -> Result<(), Self::Error> {
     let mut data = Vec::new();
-    item
-      .serialize(&mut Serializer::new(&mut data))
-      .map_err(Error::Serialize)?;
+    let mut serializer = Serializer::new(&mut data).with_struct_map();
+    item.serialize(&mut serializer).map_err(Error::Serialize)?;
 
     let len = data.len();
     if len > 0xFFFFFF {

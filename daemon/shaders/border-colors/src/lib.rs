@@ -6,7 +6,7 @@
 use spirv_std::{
   Image,
   arch::control_barrier,
-  glam::{IVec2, UVec4},
+  glam::IVec2,
   memory::{Scope, Semantics},
   spirv,
 };

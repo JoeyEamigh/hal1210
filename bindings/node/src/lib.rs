@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use hal1210client_core::{BindingError, ClientHandle};
+use hal1210client_core::{init_tracing, BindingError, ClientHandle};
 use napi::bindgen_prelude::{Error, Result};
 use napi::threadsafe_function::{ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::Status;
@@ -11,41 +11,57 @@ use serde_json::Value;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+use tracing::{debug, trace};
 
 #[napi]
 pub struct Hal1210Client {
   inner: ClientHandle,
   listeners: Arc<Mutex<Vec<Arc<ListenerHandle>>>>,
+  runtime: tokio::runtime::Handle,
 }
 
 #[napi]
 impl Hal1210Client {
   #[napi(factory)]
-  pub async fn connect() -> Result<Self> {
+  pub async fn connect(enable_tracing: Option<bool>) -> Result<Self> {
+    if enable_tracing.unwrap_or(false) {
+      init_tracing();
+      debug!("nodehal1210client: tracing initialized");
+    }
+    debug!("nodehal1210client: connecting to daemon");
     let inner = ClientHandle::connect().await.map_err(to_napi_error)?;
+    let runtime = tokio::runtime::Handle::current();
     Ok(Self {
       inner,
       listeners: Arc::new(Mutex::new(Vec::new())),
+      runtime,
     })
   }
 
+  #[napi(ts_args_type = "payload: MessageToServerData", ts_return_type = "string")]
   pub fn send(&self, payload: Value) -> Result<String> {
     let id = self.inner.send_json(payload).map_err(to_napi_error)?;
+    trace!(%id, "nodehal1210client: dispatched message");
     Ok(id.to_string())
   }
 
   #[napi(ts_return_type = "Promise<MessageToClient | null>")]
   pub async fn next_message(&self) -> Result<Option<Value>> {
-    self.inner.next_message_json().await.map_err(to_napi_error)
+    let result = self.inner.next_message_json().await.map_err(to_napi_error);
+    trace!("nodehal1210client: next_message resolved");
+    result
   }
 
   #[napi]
   pub fn cancel(&self) {
     self.stop_all_listeners();
     self.inner.cancel();
+    debug!("nodehal1210client: cancel requested");
   }
 
-  #[napi(ts_args_type = "callback: (message: MessageToClient) => void")]
+  #[napi(
+    ts_type = "(callback: (error: null, message: MessageToClient) => void): void;\nonMessage(callback: (error: Error, message: null) => void): void;"
+  )]
   pub fn on_message(&self, callback: ThreadsafeFunction<Value>) -> Result<()> {
     let mut rx = self.inner.subscribe();
     let tsfn = Arc::new(callback);
@@ -53,13 +69,14 @@ impl Hal1210Client {
     let cancel = CancellationToken::new();
     let stopper = cancel.clone();
 
-    let handle: JoinHandle<()> = tokio::spawn(async move {
+    let handle: JoinHandle<()> = self.runtime.spawn(async move {
       loop {
         tokio::select! {
           _ = stopper.cancelled() => break,
           result = rx.recv() => {
             match result {
               Ok(msg) => {
+                trace!(%msg.id, "nodehal1210client: received broadcast message");
                 let payload = match serde_json::to_value(msg) {
                   Ok(value) => value,
                   Err(err) => {
@@ -70,8 +87,10 @@ impl Hal1210Client {
                     break;
                   }
                 };
+                trace!(payload = %payload, "nodehal1210client: forwarding payload to callback");
                 let status = worker_tsfn.call(Ok(payload), ThreadsafeFunctionCallMode::NonBlocking);
                 if status != Status::Ok {
+                  debug!("nodehal1210client: on_message callback returned error status");
                   break;
                 }
               }

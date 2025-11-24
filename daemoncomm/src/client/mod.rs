@@ -3,8 +3,8 @@ use tokio::{net::TcpStream, sync::mpsc};
 use tokio_util::{codec::Framed, sync::CancellationToken};
 use uuid::Uuid;
 
-use crate::{client::codec::Hal1210ClientCodec, SOCKET_ADDR};
 use crate::{MessageToClient, MessageToServer, MessageToServerData};
+use crate::{SOCKET_ADDR, client::codec::Hal1210ClientCodec};
 
 mod codec;
 

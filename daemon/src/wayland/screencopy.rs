@@ -1,7 +1,7 @@
 use std::os::fd::OwnedFd;
 
 use wayland_client::{
-  delegate_noop, event_created_child, protocol::wl_buffer::WlBuffer, Connection, Dispatch, QueueHandle,
+  Connection, Dispatch, QueueHandle, delegate_noop, event_created_child, protocol::wl_buffer::WlBuffer,
 };
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
   zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
@@ -13,7 +13,7 @@ use wayland_protocols_wlr::screencopy::v1::client::{
   zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
 };
 
-use super::{Event, Wayland, MAX_DMABUF_PLANES};
+use super::{Event, MAX_DMABUF_PLANES, Wayland};
 use crate::gpu;
 
 delegate_noop!(Wayland: ignore ZwpLinuxDmabufV1);

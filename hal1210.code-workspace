@@ -4,6 +4,9 @@
 			"path": "bindings"
 		},
 		{
+			"path": "cli"
+		},
+		{
 			"path": "daemon"
 		},
 		{
@@ -11,9 +14,6 @@
 		},
 		{
 			"path": "espled"
-		},
-		{
-			"path": "kinect"
 		},
 		{
 			"path": "ledcomm"
@@ -29,10 +29,10 @@
 	"settings": {
 		"files.exclude": {
 			"bindings": true,
+			"cli": true,
 			"daemon": true,
 			"daemoncomm": true,
 			"espled": true,
-			"kinect": true,
 			"ledcomm": true,
 			"shadercomm": true,
 		},

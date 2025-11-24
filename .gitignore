@@ -1,6 +1,12 @@
 target/
 reference/
 debug/
-target/
 .embuild
 .switch-user.sh
+
+# profiling
+daemon/prof
+perf.data
+
+# gpl headers
+daemon/src/kinect/freenect/headers

@@ -10,13 +10,42 @@ build:
 flash:
   cd espled && cargo flash --release
 
+build-profile:
+  cd daemon && CARGO_PROFILE_RELEASE_DEBUG=true cargo build --release
+
+profile-mem:
+  @just build-profile
+  mkdir -p daemon/prof
+  cd daemon && valgrind --tool=massif --massif-out-file=prof/massif.out target/release/hal1210
+
+profile-flame:
+  mkdir -p daemon/prof
+  cd daemon && CARGO_PROFILE_RELEASE_DEBUG=true cargo flamegraph --output prof/flamegraph.svg
+
+examples:
+  @just examples-python
+  @just examples-node
+
+examples-python:
+  #!/bin/bash
+  just bindings-python
+  echo "running python examples"
+  cd bindings/python
+  source ./.venv/bin/activate
+  python3 examples/manual_mode.py
+
+examples-node:
+  @just bindings-node
+  @echo "running nodejs examples"
+  cd bindings/node && bun run examples/manual-mode.ts
+
 bindings:
   @just bindings-python
   @just bindings-node
 
 bindings-python:
   @echo "building python bindings"
-  cd bindings/python && uv build
+  cd bindings/python && uv build && uv pip install dist/pyhal1210client-0.1.0.tar.gz
   @echo "python bindings built"
 
 bindings-node:

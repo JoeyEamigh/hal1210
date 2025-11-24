@@ -36,9 +36,20 @@ async-hid = { version = "0.4.4", default-features = false, features = [
 ] }
 libc = "0.2.177"
 tokio-serial = "5.4.5"
+uuid = { version = "1.11.0", features = ["v4"] }
+cec-rs = "12.0.1"
+autocxx = "0.30.0"
+cxx = { version = "1.0.188", features = ["c++14"] }
+wifi-ctrl = "0.2.5"
 
 [build-dependencies]
 spirv-builder = { git = "https://github.com/Rust-GPU/rust-gpu", rev = "808974a0d0a57322df88d87ea05ea29ada565b0d", package = "spirv-builder" }
+autocxx-build = "0.30.0"
+miette = { version = "5", features = ["fancy"] }
+walkdir = "2.3"
+sha2 = "0.10"
 
 [dev-dependencies]
+daemoncomm = { path = "../daemoncomm", features = ["server", "client"] }
+
 serialport = "4.6.1"

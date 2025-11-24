@@ -16,7 +16,7 @@ pub fn init_logger() {
   let filter_directives = if let Ok(filter) = std::env::var("RUST_LOG") {
     filter
   } else {
-    "kinect=trace".to_string()
+    "hal1210_cli=error,daemoncomm=error".to_string()
   };
 
   // directives for release builds
@@ -27,7 +27,7 @@ pub fn init_logger() {
   let filter_directives = if let Ok(filter) = std::env::var("RUST_LOG") {
     filter
   } else {
-    "kinect=info".to_string()
+    "hal1210_cli=error,daemoncomm=error".to_string()
   };
 
   let filter = EnvFilter::builder()
@@ -37,18 +37,4 @@ pub fn init_logger() {
   tracing_subscriber::registry()
     .with(fmt::layer().with_span_events(FmtSpan::CLOSE).with_filter(filter))
     .init();
-}
-
-pub async fn wait_for_signal() {
-  use tokio::signal::{
-    ctrl_c,
-    unix::{signal, SignalKind},
-  };
-
-  let mut signal_terminate = signal(SignalKind::terminate()).expect("could not create signal handler");
-
-  tokio::select! {
-    _ = signal_terminate.recv() => tracing::info!("received SIGTERM, shutting down"),
-    _ = ctrl_c() => tracing::info!("ctrl-c received, shutting down"),
-  };
 }

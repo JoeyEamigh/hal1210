@@ -1,7 +1,7 @@
 use std::{env, path::PathBuf, time::Duration};
 
-use daemoncomm::{LedCommand, LedStripState};
-use ledcomm::{parse_write_feedback, BYTES_PER_LED, NUM_LEDS, WRITE_FEEDBACK_LEN};
+use daemoncomm::LedStripState;
+use ledcomm::{BYTES_PER_LED, NUM_LEDS, WRITE_FEEDBACK_LEN, parse_write_feedback};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio_serial::{SerialPortBuilderExt, SerialPortType, SerialStream, UsbPortInfo};
 use tokio_util::sync::CancellationToken;
@@ -55,21 +55,7 @@ impl Esp32Device {
     self.tx.shutdown().await.map_err(Esp32Error::Write)
   }
 
-  pub async fn handle_command(&mut self, command: LedCommand) -> Result<(), Esp32Error> {
-    match command {
-      LedCommand::SetStaticColor(color) => {
-        tracing::debug!(r = color[0], g = color[1], b = color[2], "ESP32 static color command");
-        self.send_static_color(color).await
-      }
-      LedCommand::SetStripState(state) => {
-        tracing::debug!("ESP32 strip state command");
-        self.send_strip_state(&state).await
-      }
-      command => todo!("LED command not implemented: {:?}", command),
-    }
-  }
-
-  async fn send_static_color(&mut self, color: [u8; 3]) -> Result<(), Esp32Error> {
+  pub async fn send_static_color(&mut self, color: [u8; 3]) -> Result<(), Esp32Error> {
     self.frame.magic = ledcomm::MAGIC;
     self.frame.len = (NUM_LEDS * BYTES_PER_LED) as u16;
     for pixel in self.frame.data.iter_mut() {
@@ -79,7 +65,7 @@ impl Esp32Device {
     self.write_frame().await
   }
 
-  async fn send_strip_state(&mut self, state: &LedStripState) -> Result<(), Esp32Error> {
+  pub async fn send_strip_state(&mut self, state: &LedStripState) -> Result<(), Esp32Error> {
     self.frame.magic = ledcomm::MAGIC;
     self.frame.len = (state.len() * BYTES_PER_LED) as u16;
     self.frame.data.copy_from_slice(state);

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 // The protocol consists of:
 // - 7-byte magic number: b"HAL1210"
 // - 3-byte big-endian length of the following messagepacked data
