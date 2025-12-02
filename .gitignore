@@ -8,5 +8,9 @@ debug/
 daemon/prof
 perf.data
 
+# debugging
+logs
+
 # gpl headers
 daemon/src/kinect/freenect/headers
+
