@@ -1,4 +1,4 @@
-use std::{cell::OnceCell, os::fd::AsFd};
+use std::os::fd::AsFd;
 
 use calloop::{channel, LoopHandle};
 use calloop_wayland_source::WaylandSource;
@@ -57,20 +57,39 @@ pub enum Event {
   Idle(IdleEvent),
 }
 
+struct BoundGlobal<T> {
+  name: u32,
+  proxy: T,
+}
+
+impl<T> BoundGlobal<T> {
+  fn new(name: u32, proxy: T) -> Self {
+    Self { name, proxy }
+  }
+
+  fn matches(&self, name: u32) -> bool {
+    self.name == name
+  }
+
+  fn proxy(&self) -> &T {
+    &self.proxy
+  }
+}
+
 pub struct Wayland {
   tx: EventTx,
   qh: QueueHandle<Wayland>,
 
   // screencopy & dmabuf globals
-  gbm_device: OnceCell<gbm::Device<gpu::drm::Device>>,
-  seat: OnceCell<WlSeat>,
-  output: OnceCell<WlOutput>,
-  screencopy: OnceCell<ZwlrScreencopyManagerV1>,
-  dmabuf: OnceCell<ZwpLinuxDmabufV1>,
-  buffer: OnceCell<WlBuffer>,
+  gbm_device: Option<gbm::Device<gpu::drm::Device>>,
+  seat: Option<BoundGlobal<WlSeat>>,
+  output: Option<BoundGlobal<WlOutput>>,
+  screencopy: Option<BoundGlobal<ZwlrScreencopyManagerV1>>,
+  dmabuf: Option<BoundGlobal<ZwpLinuxDmabufV1>>,
+  buffer: Option<WlBuffer>,
 
   // idle globals
-  idle: OnceCell<ExtIdleNotifierV1>,
+  idle: Option<BoundGlobal<ExtIdleNotifierV1>>,
 
   state: State,
 }
@@ -108,15 +127,15 @@ impl Wayland {
       qh,
 
       // screencopy & dmabuf globals
-      gbm_device: Default::default(),
-      seat: Default::default(),
-      output: Default::default(),
-      screencopy: Default::default(),
-      dmabuf: Default::default(),
-      buffer: Default::default(),
+      gbm_device: None,
+      seat: None,
+      output: None,
+      screencopy: None,
+      dmabuf: None,
+      buffer: None,
 
       // idle globals
-      idle: Default::default(),
+      idle: None,
 
       state: Default::default(),
     })
@@ -133,6 +152,45 @@ impl Wayland {
     };
 
     Ok(())
+  }
+
+  fn handle_global_remove(&mut self, name: u32) {
+    if self.output.as_ref().is_some_and(|global| global.matches(name)) {
+      tracing::info!("wl_output global removed; clearing screencopy state");
+      self.output.take();
+      self.state.frame = None;
+      self.state.frame_ready_for_copy = false;
+      self.state.buffer_created = false;
+      self.buffer = None;
+    }
+
+    if self.screencopy.as_ref().is_some_and(|global| global.matches(name)) {
+      tracing::info!("zwlr_screencopy_manager_v1 global removed; dropping pending frames");
+      self.screencopy.take();
+      self.state.frame = None;
+      self.state.frame_ready_for_copy = false;
+    }
+
+    if self.dmabuf.as_ref().is_some_and(|global| global.matches(name)) {
+      tracing::info!("zwp_linux_dmabuf_v1 global removed; dropping gbm buffers");
+      self.dmabuf.take();
+      self.buffer = None;
+      self.gbm_device = None;
+      self.state.frame = None;
+      self.state.buffer_created = false;
+      self.state.frame_ready_for_copy = false;
+    }
+
+    if self.seat.as_ref().is_some_and(|global| global.matches(name)) {
+      tracing::info!("wl_seat global removed; removing idle notifier");
+      self.seat.take();
+      self.idle.take();
+    }
+
+    if self.idle.as_ref().is_some_and(|global| global.matches(name)) {
+      tracing::info!("ext_idle_notifier_v1 global removed");
+      self.idle.take();
+    }
   }
 }
 
@@ -159,116 +217,112 @@ impl Dispatch<WlRegistry, ()> for Wayland {
     _: &Connection,
     qh: &QueueHandle<Wayland>,
   ) {
-    if let wl_registry::Event::Global {
-      name,
-      interface,
-      version,
-    } = event
-    {
-      tracing::trace!("[{name}] {interface} (v{version})");
+    match event {
+      wl_registry::Event::Global {
+        name,
+        interface,
+        version,
+      } => {
+        tracing::trace!("[{name}] {interface} (v{version})");
 
-      match &interface[..] {
-        "wl_seat" => {
-          if data.seat.get().is_some_and(|s| s.is_alive()) {
-            tracing::warn!("received duplicate wl_seat global, ignoring");
-            return;
-          };
+        match &interface[..] {
+          "wl_seat" => {
+            if data.seat.as_ref().is_some_and(|s| s.proxy.is_alive()) {
+              tracing::warn!("received duplicate wl_seat global, ignoring");
+              return;
+            }
 
-          let seat = registry.bind::<WlSeat, _, _>(name, version, qh, ());
-          tracing::debug!("wl_seat global bound");
+            let seat = registry.bind::<WlSeat, _, _>(name, version, qh, ());
+            tracing::debug!("wl_seat global bound");
 
-          if let Err(err) = data.seat.set(seat) {
-            tracing::error!("failed to store wl_seat global: {:?}", err);
+            data.seat = Some(BoundGlobal::new(name, seat));
           }
+          "wl_output" => {
+            if data.output.as_ref().is_some_and(|s| s.proxy.is_alive()) {
+              tracing::warn!("received duplicate wl_output global, ignoring");
+              return;
+            }
+
+            let output = registry.bind::<WlOutput, _, _>(name, version, qh, ());
+            tracing::debug!("wl_output global bound");
+
+            if let Some(manager) = data.screencopy.as_ref().map(|global| global.proxy()) {
+              tracing::debug!("requesting screencopy on output");
+              let frame = manager.capture_output(0, &output, qh, ());
+              data.state.frame.replace(frame);
+            }
+
+            data.output = Some(BoundGlobal::new(name, output));
+          }
+          "zwp_linux_dmabuf_v1" => {
+            if data.dmabuf.as_ref().is_some_and(|s| s.proxy.is_alive()) {
+              tracing::warn!("received duplicate zwp_linux_dmabuf_v1 global, ignoring");
+              return;
+            }
+
+            let dmabuf = registry.bind::<ZwpLinuxDmabufV1, _, _>(name, version, qh, ());
+            tracing::debug!("zwp_linux_dmabuf_v1 global bound");
+
+            tracing::debug!("requesting dmabuf default feedback");
+            dmabuf.get_default_feedback(qh, ());
+
+            data.dmabuf = Some(BoundGlobal::new(name, dmabuf));
+          }
+          "zwlr_screencopy_manager_v1" => {
+            if data.screencopy.as_ref().is_some_and(|s| s.proxy.is_alive()) {
+              tracing::warn!("received duplicate wlr_screencopy_manager global, ignoring");
+              return;
+            }
+
+            let manager = registry.bind::<ZwlrScreencopyManagerV1, _, _>(name, version, qh, ());
+            tracing::debug!("zwlr_screencopy_manager_v1 global bound");
+
+            if let Some(output) = data.output.as_ref().map(|global| global.proxy()) {
+              tracing::debug!("requesting screencopy on output");
+              let frame = manager.capture_output(0, output, qh, ());
+              data.state.frame.replace(frame);
+            }
+
+            data.screencopy = Some(BoundGlobal::new(name, manager));
+          }
+          "ext_idle_notifier_v1" => {
+            if data.idle.as_ref().is_some_and(|s| s.proxy.is_alive()) {
+              tracing::warn!("received duplicate ext_idle_notifier_v1 global, ignoring");
+              return;
+            }
+
+            let idle = registry.bind::<ExtIdleNotifierV1, _, _>(name, version, qh, ());
+            tracing::debug!("ext_idle_notifier_v1 global bound");
+
+            let Some(seat) = data.seat.as_ref().map(|global| global.proxy()) else {
+              tracing::error!("wl_seat is not available to request idle notification. this should not happen");
+              return;
+            };
+
+            idle.get_idle_notification(IDLE_NOTIFY_TIMEOUT_MS, seat, qh, ());
+
+            data.idle = Some(BoundGlobal::new(name, idle));
+          }
+          _ => {}
         }
-        "wl_output" => {
-          if data.output.get().is_some_and(|s| s.is_alive()) {
-            tracing::warn!("received duplicate wl_output global, ignoring");
-            return;
-          };
-
-          let output = registry.bind::<WlOutput, _, _>(name, version, qh, ());
-          tracing::debug!("wl_output global bound");
-
-          if let Some(manager) = data.screencopy.get() {
-            tracing::debug!("requesting screencopy on output");
-            let frame = manager.capture_output(0, &output, qh, ());
-            data.state.frame.replace(frame);
-          }
-
-          if let Err(err) = data.output.set(output) {
-            tracing::error!("failed to store wl_output global: {:?}", err);
-          }
-        }
-        "zwp_linux_dmabuf_v1" => {
-          if data.dmabuf.get().is_some_and(|s| s.is_alive()) {
-            tracing::warn!("received duplicate zwp_linux_dmabuf_v1 global, ignoring");
-            return;
-          };
-
-          let dmabuf = registry.bind::<ZwpLinuxDmabufV1, _, _>(name, version, qh, ());
-          tracing::debug!("zwp_linux_dmabuf_v1 global bound");
-
-          tracing::debug!("requesting dmabuf default feedback");
-          dmabuf.get_default_feedback(qh, ());
-
-          if let Err(err) = data.dmabuf.set(dmabuf) {
-            tracing::error!("failed to store zwp_linux_dmabuf_v1 global: {:?}", err);
-          }
-        }
-        "zwlr_screencopy_manager_v1" => {
-          if data.screencopy.get().is_some_and(|s| s.is_alive()) {
-            tracing::warn!("received duplicate wlr_screencopy_manager global, ignoring");
-            return;
-          };
-
-          let manager = registry.bind::<ZwlrScreencopyManagerV1, _, _>(name, version, qh, ());
-          tracing::debug!("zwlr_screencopy_manager_v1 global bound");
-
-          if let Some(output) = data.output.get() {
-            tracing::debug!("requesting screencopy on output");
-            let frame = manager.capture_output(0, output, qh, ());
-            data.state.frame.replace(frame);
-          }
-
-          if let Err(err) = data.screencopy.set(manager) {
-            tracing::error!("failed to store wlr_screencopy_manager_v1 global: {:?}", err);
-          }
-        }
-        "ext_idle_notifier_v1" => {
-          if data.idle.get().is_some_and(|s| s.is_alive()) {
-            tracing::warn!("received duplicate ext_idle_notifier_v1 global, ignoring");
-            return;
-          };
-
-          let idle = registry.bind::<ExtIdleNotifierV1, _, _>(name, version, qh, ());
-          tracing::debug!("ext_idle_notifier_v1 global bound");
-
-          let Some(seat) = data.seat.get() else {
-            tracing::error!("wl_seat is not available to request idle notification. this should not happen");
-            return;
-          };
-
-          idle.get_idle_notification(IDLE_NOTIFY_TIMEOUT_MS, seat, qh, ());
-
-          if let Err(err) = data.idle.set(idle) {
-            tracing::error!("failed to store ext_idle_notifier_v1 global: {:?}", err);
-          }
-        }
-        _ => {}
       }
+      wl_registry::Event::GlobalRemove { name } => {
+        tracing::trace!("[{name}] global removed");
+        data.handle_global_remove(name);
+      }
+      _ => {}
     }
   }
 }
 
 impl Wayland {
   fn request_screencopy_frame(&mut self) {
-    let Some(manager) = self.screencopy.get() else {
+    let Some(manager) = self.screencopy.as_ref().map(|global| global.proxy()) else {
       tracing::error!("screencopy manager is not available to request screencopy frame");
       return;
     };
 
-    let Some(output) = self.output.get() else {
+    let Some(output) = self.output.as_ref().map(|global| global.proxy()) else {
       tracing::error!("wl_output is not available to request screencopy frame");
       return;
     };
@@ -284,7 +338,7 @@ impl Wayland {
       return;
     };
 
-    let Some(buffer) = self.buffer.get() else {
+    let Some(buffer) = self.buffer.as_ref() else {
       // this happens on the first frame request, as the buffer is created asynchronously
       // tracing::error!("no dmabuf buffer available for screencopy frame");
       return;
@@ -295,7 +349,7 @@ impl Wayland {
   }
 
   fn request_create_dmabuf_buffer(&mut self, format: u32, width: u32, height: u32, qh: &QueueHandle<Wayland>) {
-    let dmabuf = match self.dmabuf.get() {
+    let dmabuf = match self.dmabuf.as_ref().map(|global| global.proxy()) {
       Some(dmabuf) => dmabuf,
       None => {
         tracing::error!("received screencopy buffer event but dmabuf global is not available");
@@ -304,7 +358,7 @@ impl Wayland {
     };
 
     tracing::trace!("creating gbm buffer object");
-    let gbm_device = match self.gbm_device.get() {
+    let gbm_device = match self.gbm_device.as_ref() {
       Some(dev) => dev,
       None => {
         tracing::error!("gbm device is not available, cannot create gbm buffer object");

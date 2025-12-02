@@ -2,8 +2,8 @@ use std::{
   collections::{HashMap, VecDeque},
   net::SocketAddr,
   sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
   },
   time::{Duration, Instant},
 };

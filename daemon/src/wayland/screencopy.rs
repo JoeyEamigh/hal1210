@@ -1,7 +1,7 @@
 use std::os::fd::OwnedFd;
 
 use wayland_client::{
-  Connection, Dispatch, QueueHandle, delegate_noop, event_created_child, protocol::wl_buffer::WlBuffer,
+  delegate_noop, event_created_child, protocol::wl_buffer::WlBuffer, Connection, Dispatch, QueueHandle,
 };
 use wayland_protocols::wp::linux_dmabuf::zv1::client::{
   zwp_linux_buffer_params_v1::{self, ZwpLinuxBufferParamsV1},
@@ -13,7 +13,7 @@ use wayland_protocols_wlr::screencopy::v1::client::{
   zwlr_screencopy_manager_v1::ZwlrScreencopyManagerV1,
 };
 
-use super::{Event, MAX_DMABUF_PLANES, Wayland};
+use super::{Event, Wayland, MAX_DMABUF_PLANES};
 use crate::gpu;
 
 delegate_noop!(Wayland: ignore ZwpLinuxDmabufV1);
@@ -79,9 +79,10 @@ impl Dispatch<ZwpLinuxDmabufFeedbackV1, ()> for Wayland {
         };
         tracing::debug!("successfully created gbm device from drm device: {:?}", gbm_device);
 
-        if let Err(err) = data.gbm_device.set(gbm_device) {
-          tracing::error!("failed to store gbm device: {:?}", err);
+        if data.gbm_device.is_some() {
+          tracing::debug!("replacing previously stored gbm device");
         }
+        data.gbm_device = Some(gbm_device);
       }
       zwp_linux_dmabuf_feedback_v1::Event::TrancheDone => {
         tracing::trace!("dmabuf feedback tranche done");
@@ -116,9 +117,8 @@ impl Dispatch<ZwpLinuxBufferParamsV1, ()> for Wayland {
       zwp_linux_buffer_params_v1::Event::Created { buffer } => {
         tracing::trace!("dmabuf buffer created: {:?}", buffer);
 
-        if let Err(err) = data.buffer.set(buffer) {
-          tracing::error!("failed to store dmabuf buffer: {:?}", err);
-          return;
+        if data.buffer.replace(buffer).is_some() {
+          tracing::debug!("replacing existing dmabuf buffer");
         }
 
         data.state.buffer_created = true;
@@ -195,7 +195,7 @@ impl Dispatch<ZwlrScreencopyFrameV1, ()> for Wayland {
       zwlr_screencopy_frame_v1::Event::LinuxDmabuf { format, width, height } => {
         tracing::trace!("screencopy frame linux dmabuf: format={format:?}, width={width}, height={height}");
 
-        if data.buffer.get().is_none() {
+        if data.buffer.is_none() {
           data.request_create_dmabuf_buffer(format, width, height, qh);
         }
       }
