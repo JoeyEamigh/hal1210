@@ -92,7 +92,6 @@ impl KinectManager {
       for event in monitor.iter() {
         let device = event.device();
 
-        // Check if this is a Kinect device by vendor/product ID
         let vendor = device.property_value("ID_VENDOR_ID");
         let product = device.property_value("ID_MODEL_ID");
 
@@ -155,7 +154,7 @@ impl KinectManager {
           break;
         }
         _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
-          // Periodic wake-up to check udev events
+          // periodic wake-up to check udev events
         }
       }
     }

@@ -34,19 +34,16 @@ fn freenect_build() -> miette::Result<()> {
   let include_path = PathBuf::from("src");
   let headers_path = PathBuf::from("src/kinect/freenect/headers");
 
-  // Copy headers and apply any patches if required.
   let system_headers = Path::new("/usr/include/libfreenect");
   let dest_headers = Path::new("src/kinect/freenect/headers");
   let patches_dir = Path::new("src/kinect/freenect/patches");
 
-  // Check system headers exist
   if !system_headers.exists() {
     return Err(miette::miette!(
       "Freenect headers not found at /usr/include/libfreenect. Please install libfreenect-dev and try again."
     ));
   }
 
-  // Ensure we re-run the build script if patches change
   if patches_dir.exists() {
     let mut patches: Vec<_> = std::fs::read_dir(patches_dir)
       .into_diagnostic()?
@@ -59,7 +56,6 @@ fn freenect_build() -> miette::Result<()> {
     }
   }
 
-  // Compute whether to copy/apply patches
   let patches_hash = compute_patches_hash(patches_dir)?;
   let need_copy = if dest_headers.exists() {
     match (&patches_hash, read_stored_hash(dest_headers)?) {
@@ -156,7 +152,6 @@ fn copy_dir(src: &Path, dst: &Path) -> miette::Result<()> {
 
 fn apply_patches(patches_dir: &Path, dest: &Path) -> miette::Result<()> {
   use std::process::Command;
-  // Ensure 'patch' exists
   let patch_check = Command::new("patch").arg("--version").output();
   if patch_check.is_err() || !patch_check.unwrap().status.success() {
     return Err(miette::miette!(

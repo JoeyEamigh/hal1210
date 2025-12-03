@@ -33,7 +33,6 @@ async fn main() {
   let signal = event_loop.get_signal();
   let cancel_token = tokio_util::sync::CancellationToken::new();
 
-  // Initialize and spawn the Kinect manager (never fails, handles hotplug)
   let kinect_handle = {
     let cancel = cancel_token.child_token();
     let kinect_manager =
