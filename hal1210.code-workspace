@@ -39,6 +39,17 @@
     "rust-analyzer.cargo.allTargets": true,
     "rust-analyzer.cargo.features": "all",
     "rust-analyzer.check.features": "all",
-    "cSpell.words": ["Freenect", "Kinect"]
+    "cSpell.words": ["Freenect", "Kinect"],
+    "mcp": {
+      "servers": {
+        "rustdoc": {
+          "type": "stdio",
+          "command": "cratedocs",
+          "args": ["stdio"]
+        }
+      },
+      "inputs": []
+    },
+    "liveServer.settings.multiRootWorkspaceName": "daemon"
   }
 }
