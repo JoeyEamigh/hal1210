@@ -15,9 +15,10 @@ mod libfreenect {
   pub use ffi::*;
 }
 
+use std::pin::Pin;
+
 use autocxx::{c_void, prelude::*};
 use libfreenect::Freenect;
-use std::pin::Pin;
 use tokio::sync::mpsc;
 
 pub struct VideoFrame {
@@ -42,8 +43,8 @@ pub struct Kinect {
   device: *mut Freenect::FreenectDevice,
 
   // Channels
-  video_rx: Option<mpsc::UnboundedReceiver<VideoFrame>>,
-  depth_rx: Option<mpsc::UnboundedReceiver<DepthFrame>>,
+  video_rx: mpsc::UnboundedReceiver<VideoFrame>,
+  depth_rx: mpsc::UnboundedReceiver<DepthFrame>,
 
   // Pointers to callback data to drop them later
   video_cb_data: *mut c_void,
@@ -54,7 +55,7 @@ unsafe impl Send for Kinect {}
 unsafe impl Sync for Kinect {}
 
 impl Kinect {
-  pub fn new(index: i32) -> Result<Self, Box<dyn std::error::Error>> {
+  pub fn new(index: i32) -> Result<Self, KinectError> {
     let mut freenect = Freenect::Freenect::new().within_unique_ptr();
     let device_ref = freenect.pin_mut().createSimpleDevice(c_int(index));
 
@@ -86,8 +87,8 @@ impl Kinect {
     Ok(Kinect {
       _freenect: freenect,
       device: device_ptr,
-      video_rx: Some(video_rx),
-      depth_rx: Some(depth_rx),
+      video_rx,
+      depth_rx,
       video_cb_data: video_data_ptr,
       depth_cb_data: depth_data_ptr,
     })
@@ -139,14 +140,6 @@ impl Kinect {
     unsafe {
       Pin::new_unchecked(&mut *self.device).setDepthFormat(fmt, res);
     }
-  }
-
-  pub fn get_video_stream(&mut self) -> Option<mpsc::UnboundedReceiver<VideoFrame>> {
-    self.video_rx.take()
-  }
-
-  pub fn get_depth_stream(&mut self) -> Option<mpsc::UnboundedReceiver<DepthFrame>> {
-    self.depth_rx.take()
   }
 }
 
@@ -200,4 +193,12 @@ extern "C" fn depth_callback(user_data: *mut c_void, data: *mut c_void, timestam
       let _ = cb_data.sender.send(DepthFrame { data: vec, timestamp });
     }
   }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum KinectError {
+  #[error("failed to create freenect context")]
+  ContextCreation,
+  #[error("failed to open device at index {0}")]
+  DeviceOpen(i32),
 }

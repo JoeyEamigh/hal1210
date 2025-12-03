@@ -117,11 +117,11 @@ impl KinectManager {
           _ => None,
         };
 
-        if let Some(evt) = udev_event {
-          if tx.send(evt).is_err() {
-            tracing::debug!("udev monitor channel closed; exiting");
-            break;
-          }
+        if let Some(evt) = udev_event
+          && tx.send(evt).is_err()
+        {
+          tracing::debug!("udev monitor channel closed; exiting");
+          break;
         }
       }
 
@@ -238,10 +238,4 @@ impl KinectManager {
       tracing::warn!("failed to publish Kinect status event: {err}");
     }
   }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum KinectError {
-  #[error("device unavailable: {reason}")]
-  DeviceUnavailable { reason: String },
 }
