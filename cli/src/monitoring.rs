@@ -1,11 +1,11 @@
 pub fn init_logger() {
   use tracing::metadata::LevelFilter;
   use tracing_subscriber::{
+    EnvFilter, Layer,
     filter::Directive,
     fmt::{self, format::FmtSpan},
     prelude::__tracing_subscriber_SubscriberExt,
     util::SubscriberInitExt,
-    EnvFilter, Layer,
   };
 
   // directives for debug builds

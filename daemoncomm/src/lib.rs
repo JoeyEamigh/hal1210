@@ -34,6 +34,31 @@ pub enum LedCommand {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct KinectStatus {
+  pub connected: bool,
+  pub status: String,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub device_serial: Option<String>,
+  #[serde(skip_serializing_if = "Option::is_none")]
+  pub firmware_version: Option<String>,
+  pub depth_active: bool,
+  pub rgb_active: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data", rename_all = "camelCase")]
+pub enum KinectEvent {
+  Status(KinectStatus),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data", rename_all = "camelCase")]
+pub enum KinectCommand {
+  RequestStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MessageToClient {
   pub id: Uuid,
   #[serde(flatten)]
@@ -55,6 +80,7 @@ pub enum MessageToClientData {
     #[serde(skip_serializing_if = "Option::is_none")]
     timeout_ms: Option<u64>,
   },
+  Kinect(KinectEvent),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,4 +106,5 @@ pub enum MessageToServerData {
     timeout_ms: Option<u64>,
   },
   GetIdleInhibit,
+  Kinect(KinectCommand),
 }

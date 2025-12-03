@@ -41,6 +41,8 @@ cec-rs = "12.0.1"
 autocxx = "0.30.0"
 cxx = { version = "1.0.188", features = ["c++14"] }
 wifi-ctrl = "0.2.5"
+opencv = { version = "0.97.2", features = ["clang-runtime"] }
+udev = { version = "0.9.3", features = ["hwdb", "send"] }
 
 [build-dependencies]
 spirv-builder = { git = "https://github.com/Rust-GPU/rust-gpu", rev = "808974a0d0a57322df88d87ea05ea29ada565b0d", package = "spirv-builder" }

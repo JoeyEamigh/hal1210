@@ -44,6 +44,10 @@ impl ClientSessions {
   pub fn client_count(&self) -> usize {
     self.clients.len()
   }
+
+  pub fn iter(&self) -> impl Iterator<Item = SocketAddr> + '_ {
+    self.clients.iter().copied()
+  }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

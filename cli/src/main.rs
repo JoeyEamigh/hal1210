@@ -5,7 +5,10 @@ use std::{
 
 use color_eyre::{Result, eyre::WrapErr, eyre::eyre};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use daemoncomm::{Color, LedCommand, MessageToClient, MessageToClientData, MessageToServerData, client::Hal1210Client};
+use daemoncomm::{
+  Color, KinectCommand, KinectEvent, KinectStatus, LedCommand, MessageToClient, MessageToClientData,
+  MessageToServerData, client::Hal1210Client,
+};
 use ratatui::{
   DefaultTerminal, Frame,
   layout::{Constraint, Direction, Layout, Rect},
@@ -427,6 +430,12 @@ impl App {
           self.push_error(err.to_string());
         }
       }
+      CommandKind::Kinect(KinectCommandKind::RequestStatus) => {
+        self.send_or_log(
+          "Get Kinect status",
+          MessageToServerData::Kinect(KinectCommand::RequestStatus),
+        );
+      }
       CommandKind::Led(LedCommandKind::SetStaticColor) => {
         if let Some(color) = self.read_pending_color() {
           self.send_or_log(
@@ -576,7 +585,36 @@ impl App {
         }
         self.push_log(message);
       }
+      MessageToClientData::Kinect(notification) => {
+        self.handle_kinect_notification(notification);
+      }
     }
+  }
+
+  fn handle_kinect_notification(&mut self, notification: KinectEvent) {
+    match notification {
+      KinectEvent::Status(status) => {
+        self.push_log(format!("kinect status · {}", Self::format_kinect_status(&status)));
+      }
+    }
+  }
+
+  fn format_kinect_status(status: &KinectStatus) -> String {
+    let mut parts = vec![if status.connected { "connected" } else { "disconnected" }.to_string()];
+
+    if let Some(serial) = &status.device_serial {
+      parts.push(format!("serial={serial}"));
+    }
+
+    if let Some(fw) = &status.firmware_version {
+      parts.push(format!("fw={fw}"));
+    }
+
+    parts.push(format!("depth={}", if status.depth_active { "on" } else { "off" }));
+    parts.push(format!("rgb={}", if status.rgb_active { "on" } else { "off" }));
+
+    parts.push(format!("status={}", status.status));
+    parts.join(" · ")
   }
 
   fn push_log(&mut self, message: impl Into<String>) {
@@ -828,6 +866,7 @@ enum CommandKind {
   GetIdleInhibit,
   IdleInhibit(bool),
   Led(LedCommandKind),
+  Kinect(KinectCommandKind),
 }
 
 #[derive(Clone, Copy)]
@@ -844,6 +883,11 @@ enum LedCommandKind {
 enum DurationField {
   IdleInhibit,
   FadeOut,
+}
+
+#[derive(Clone, Copy)]
+enum KinectCommandKind {
+  RequestStatus,
 }
 
 const COMMANDS: &[CommandDescriptor] = &[
@@ -886,6 +930,13 @@ const COMMANDS: &[CommandDescriptor] = &[
     label: "Disable idle inhibit",
     description: "Allow the daemon to fade out when idle again.",
     kind: CommandKind::IdleInhibit(false),
+    supported: true,
+    duration: None,
+  },
+  CommandDescriptor {
+    label: "Get Kinect status",
+    description: "Query the daemon for Kinect availability and health.",
+    kind: CommandKind::Kinect(KinectCommandKind::RequestStatus),
     supported: true,
     duration: None,
   },

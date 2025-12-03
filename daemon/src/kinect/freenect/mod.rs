@@ -56,12 +56,8 @@ unsafe impl Sync for Kinect {}
 impl Kinect {
   pub fn new(index: i32) -> Result<Self, Box<dyn std::error::Error>> {
     let mut freenect = Freenect::Freenect::new().within_unique_ptr();
-
-    // createSimpleDevice returns Pin<&mut FreenectDevice>
     let device_ref = freenect.pin_mut().createSimpleDevice(c_int(index));
 
-    // Get raw pointer from Pin<&mut T>
-    // We use unsafe to get the mutable reference and then cast to pointer
     let device_ptr = unsafe {
       let mut_ref = device_ref.get_unchecked_mut();
       mut_ref as *mut Freenect::FreenectDevice
@@ -83,9 +79,6 @@ impl Kinect {
     let depth_data_ptr = Box::into_raw(depth_data) as *mut c_void;
 
     unsafe {
-      // We need to call setRustVideoCallback on the device.
-      // Since we have a raw pointer, we need to be careful.
-      // We can reconstruct a Pin<&mut> temporarily.
       Pin::new_unchecked(&mut *device_ptr).setRustVideoCallback(video_callback as *mut c_void, video_data_ptr);
       Pin::new_unchecked(&mut *device_ptr).setRustDepthCallback(depth_callback as *mut c_void, depth_data_ptr);
     }
@@ -163,7 +156,7 @@ impl Drop for Kinect {
       let mut device = Pin::new_unchecked(&mut *self.device);
       device.as_mut().stopVideo();
       device.as_mut().stopDepth();
-      // Clean up callbacks
+
       device
         .as_mut()
         .setRustVideoCallback(std::ptr::null_mut(), std::ptr::null_mut());
@@ -171,7 +164,6 @@ impl Drop for Kinect {
         .as_mut()
         .setRustDepthCallback(std::ptr::null_mut(), std::ptr::null_mut());
 
-      // Drop callback data
       let _ = Box::from_raw(self.video_cb_data as *mut CallbackData<VideoFrame>);
       let _ = Box::from_raw(self.depth_cb_data as *mut CallbackData<DepthFrame>);
     }
@@ -183,6 +175,7 @@ extern "C" fn video_callback(user_data: *mut c_void, data: *mut c_void, timestam
     if user_data.is_null() || data.is_null() {
       return;
     }
+
     let cb_data = &*(user_data as *const CallbackData<VideoFrame>);
     let size = Pin::new_unchecked(&mut *cb_data.device).getVideoBufferSize().0;
     if size > 0 {
@@ -198,6 +191,7 @@ extern "C" fn depth_callback(user_data: *mut c_void, data: *mut c_void, timestam
     if user_data.is_null() || data.is_null() {
       return;
     }
+
     let cb_data = &*(user_data as *const CallbackData<DepthFrame>);
     let size = Pin::new_unchecked(&mut *cb_data.device).getDepthBufferSize().0;
     if size > 0 {

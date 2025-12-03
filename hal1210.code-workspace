@@ -1,43 +1,44 @@
 {
-	"folders": [
-		{
-			"path": "bindings"
-		},
-		{
-			"path": "cli"
-		},
-		{
-			"path": "daemon"
-		},
-		{
-			"path": "daemoncomm"
-		},
-		{
-			"path": "espled"
-		},
-		{
-			"path": "ledcomm"
-		},
-		{
-			"path": "shadercomm"
-		},
-		{
-			"path": ".",
-			"name": "root"
-		}
-	],
-	"settings": {
-		"files.exclude": {
-			"bindings": true,
-			"cli": true,
-			"daemon": true,
-			"daemoncomm": true,
-			"espled": true,
-			"ledcomm": true,
-			"shadercomm": true,
-		},
-		"rust-analyzer.cargo.allTargets": true,
-		"rust-analyzer.cargo.features": "all",
-		"rust-analyzer.check.features": "all",
-	}
+  "folders": [
+    {
+      "path": "bindings"
+    },
+    {
+      "path": "cli"
+    },
+    {
+      "path": "daemon"
+    },
+    {
+      "path": "daemoncomm"
+    },
+    {
+      "path": "espled"
+    },
+    {
+      "path": "ledcomm"
+    },
+    {
+      "path": "shadercomm"
+    },
+    {
+      "path": ".",
+      "name": "root"
+    }
+  ],
+  "settings": {
+    "files.exclude": {
+      "bindings": true,
+      "cli": true,
+      "daemon": true,
+      "daemoncomm": true,
+      "espled": true,
+      "ledcomm": true,
+      "shadercomm": true
+    },
+    "rust-analyzer.cargo.allTargets": true,
+    "rust-analyzer.cargo.features": "all",
+    "rust-analyzer.check.features": "all",
+    "cSpell.words": ["Freenect", "Kinect"]
+  }
 }

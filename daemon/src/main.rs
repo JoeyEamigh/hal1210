@@ -24,12 +24,24 @@ async fn main() {
   let (led_event_tx, led_event_rx) = tokio::sync::mpsc::unbounded_channel();
   let (client_man_client_req_tx, client_man_client_req_rx) = tokio::sync::mpsc::unbounded_channel();
   let (client_man_server_res_tx, client_man_server_res_rx) = tokio::sync::mpsc::unbounded_channel();
+  let (kinect_cmd_tx, kinect_cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+  let (kinect_event_tx, kinect_event_rx) = tokio::sync::mpsc::unbounded_channel();
 
   let mut event_loop = calloop::EventLoop::try_new().expect("could not create event loop");
   let handle = event_loop.handle();
 
   let signal = event_loop.get_signal();
   let cancel_token = tokio_util::sync::CancellationToken::new();
+
+  // Initialize and spawn the Kinect manager (never fails, handles hotplug)
+  let kinect_handle = {
+    let cancel = cancel_token.child_token();
+    let kinect_manager =
+      tokio::task::spawn_blocking(move || kinect::KinectManager::init(kinect_event_tx, kinect_cmd_rx, cancel))
+        .await
+        .expect("Kinect manager task panicked during initialization");
+    kinect_manager.spawn()
+  };
 
   let mut wayland =
     wayland::Wayland::init(wayland_event_tx, wayland_cmd_rx, handle.clone()).expect("could not connect to wayland");
@@ -44,6 +56,8 @@ async fn main() {
     led_event_rx,
     client_man_server_res_tx,
     client_man_client_req_rx,
+    kinect_cmd_tx,
+    kinect_event_rx,
     signal,
     cancel_token.clone(),
   );
@@ -71,6 +85,7 @@ async fn main() {
   handler_handle.await.expect("bridge task panicked");
   led_man_handle.await.expect("LED manager task panicked");
   client_man_handle.await.expect("communication manager task panicked");
+  kinect_handle.await.expect("Kinect manager task panicked");
 
   tracing::info!("exiting");
 }

@@ -1,18 +1,17 @@
 use std::{cell::OnceCell, os::fd::AsFd};
 
-use calloop::{channel, LoopHandle};
+use calloop::{LoopHandle, channel};
 use calloop_wayland_source::WaylandSource;
 use idle::IdleEvent;
 use screencopy::{Dmabuf, DmabufPlane};
 use wayland_client::{
-  delegate_noop,
+  Connection, Dispatch, Proxy, QueueHandle, delegate_noop,
   protocol::{
     wl_buffer::WlBuffer,
     wl_output::WlOutput,
     wl_registry::{self, WlRegistry},
     wl_seat::WlSeat,
   },
-  Connection, Dispatch, Proxy, QueueHandle,
 };
 use wayland_protocols::{
   ext::idle_notify::v1::client::ext_idle_notifier_v1::ExtIdleNotifierV1,
