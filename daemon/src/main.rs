@@ -33,19 +33,24 @@ async fn main() {
   let signal = event_loop.get_signal();
   let cancel_token = tokio_util::sync::CancellationToken::new();
 
-  let kinect_handle = {
-    let cancel = cancel_token.child_token();
-    let kinect_manager =
-      tokio::task::spawn_blocking(move || kinect::KinectManager::init(kinect_event_tx, kinect_cmd_rx, cancel))
-        .await
-        .expect("Kinect manager task panicked during initialization");
-    kinect_manager.spawn()
-  };
+  let compute = gpu::Compute::init().expect("could not initialize compute module");
 
   let mut wayland =
     wayland::Wayland::init(wayland_event_tx, wayland_cmd_rx, handle.clone()).expect("could not connect to wayland");
 
-  let compute = gpu::Compute::init().expect("could not initialize compute module");
+  let led_man = led::LedManager::init(led_event_tx, led_cmd_rx, cancel_token.child_token())
+    .await
+    .expect("could not initialize LED manager");
+
+  let client_man = client::ClientMan::init(
+    client_man_client_req_tx,
+    client_man_server_res_rx,
+    cancel_token.child_token(),
+  )
+  .await
+  .expect("could not initialize communication manager");
+
+  let kinect_man = kinect::KinectManager::init(kinect_event_tx, kinect_cmd_rx, cancel_token.child_token());
 
   let handler = bridge::Handler::new(
     compute,
@@ -60,21 +65,11 @@ async fn main() {
     signal,
     cancel_token.clone(),
   );
+
   let handler_handle = handler.spawn();
-
-  let led_man = led::LedManager::init(led_event_tx, led_cmd_rx, cancel_token.child_token())
-    .await
-    .expect("could not initialize LED manager");
   let led_man_handle = led_man.spawn();
-
-  let client_man = client::ClientMan::init(
-    client_man_client_req_tx,
-    client_man_server_res_rx,
-    cancel_token.child_token(),
-  )
-  .await
-  .expect("could not initialize communication manager");
   let client_man_handle = client_man.spawn();
+  let kinect_man_handle = kinect_man.spawn();
 
   tracing::info!("starting main loop");
   event_loop
@@ -84,7 +79,7 @@ async fn main() {
   handler_handle.await.expect("bridge task panicked");
   led_man_handle.await.expect("LED manager task panicked");
   client_man_handle.await.expect("communication manager task panicked");
-  kinect_handle.await.expect("Kinect manager task panicked");
+  kinect_man_handle.await.expect("Kinect manager task panicked");
 
   tracing::info!("exiting");
 }
