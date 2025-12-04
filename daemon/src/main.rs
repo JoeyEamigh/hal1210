@@ -26,6 +26,8 @@ async fn main() {
   let (client_man_server_res_tx, client_man_server_res_rx) = tokio::sync::mpsc::unbounded_channel();
   let (kinect_cmd_tx, kinect_cmd_rx) = tokio::sync::mpsc::unbounded_channel();
   let (kinect_event_tx, kinect_event_rx) = tokio::sync::mpsc::unbounded_channel();
+  let (cec_cmd_tx, cec_cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+  let (cec_event_tx, cec_event_rx) = tokio::sync::mpsc::unbounded_channel();
 
   let mut event_loop = calloop::EventLoop::try_new().expect("could not create event loop");
   let handle = event_loop.handle();
@@ -51,6 +53,7 @@ async fn main() {
   .expect("could not initialize communication manager");
 
   let kinect_man = kinect::KinectManager::init(kinect_event_tx, kinect_cmd_rx, cancel_token.child_token());
+  let cec_man = cec::CecManager::init(cec_event_tx, cec_cmd_rx, cancel_token.child_token()).await;
 
   let handler = bridge::Handler::new(
     compute,
@@ -62,6 +65,8 @@ async fn main() {
     client_man_client_req_rx,
     kinect_cmd_tx,
     kinect_event_rx,
+    cec_cmd_tx,
+    cec_event_rx,
     signal,
     cancel_token.clone(),
   );
@@ -70,6 +75,7 @@ async fn main() {
   let led_man_handle = led_man.spawn();
   let client_man_handle = client_man.spawn();
   let kinect_man_handle = kinect_man.spawn();
+  let cec_man_handle = cec_man.spawn();
 
   tracing::info!("starting main loop");
   event_loop
@@ -80,6 +86,7 @@ async fn main() {
   led_man_handle.await.expect("LED manager task panicked");
   client_man_handle.await.expect("communication manager task panicked");
   kinect_man_handle.await.expect("Kinect manager task panicked");
+  cec_man_handle.await.expect("CEC manager task panicked");
 
   tracing::info!("exiting");
 }

@@ -132,7 +132,6 @@ pub async fn await_compute_dispatch(
   frame_stage_tx: FrameStageTx,
   idle: bool,
   manual_flag: Arc<AtomicBool>,
-  fade_in: bool,
 ) {
   match compute_rx.await {
     Ok(result) => {
@@ -161,16 +160,7 @@ pub async fn await_compute_dispatch(
             color.as_slice()[start..start + BYTES_PER_LED].try_into().unwrap()
           });
 
-          let command = if fade_in {
-            LedCommand::FadeIn {
-              state: strip_state,
-              duration_ms: None,
-            }
-          } else {
-            LedCommand::SetStripState(strip_state)
-          };
-
-          match led_tx.send(command) {
+          match led_tx.send(LedCommand::SetStripState(strip_state)) {
             Ok(()) => {
               if frame_stage_tx
                 .send(FrameStage::LedDispatched {

@@ -16,6 +16,29 @@ pub const SOCKET_ADDR: &str = "127.0.0.1:1210";
 pub type Color = [u8; BYTES_PER_LED];
 pub type LedStripState = ledcomm::StateFrame;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum CecCommand {
+  PowerOn,
+  PowerOff,
+  RequestActiveSource,
+  RequestStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CecStatus {
+  pub powered_on: bool,
+  pub active_source: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data", rename_all = "camelCase")]
+pub enum CecEvent {
+  Status(CecStatus),
+  Error { message: String },
+}
+
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum LedCommand {
@@ -81,6 +104,7 @@ pub enum MessageToClientData {
     timeout_ms: Option<u64>,
   },
   Kinect(KinectEvent),
+  Cec(CecEvent),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -107,4 +131,5 @@ pub enum MessageToServerData {
   },
   GetIdleInhibit,
   Kinect(KinectCommand),
+  Cec(CecCommand),
 }

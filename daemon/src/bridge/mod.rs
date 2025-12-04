@@ -6,10 +6,11 @@ use std::{
   },
 };
 
-use daemoncomm::{LedCommand, MessageToServer, MessageToServerData};
+use daemoncomm::{CecEvent, CecStatus, LedCommand, MessageToServer, MessageToServerData};
 use tokio::task::JoinHandle;
 
 use crate::{
+  cec,
   client::{
     self,
     session::{ClientSessions, DisconnectOutcome},
@@ -19,12 +20,14 @@ use crate::{
 };
 use uuid::Uuid;
 
+mod cec_control;
 mod frame;
 mod idle;
 mod kinect;
 mod messaging;
 
 use self::{
+  cec_control::CecController,
   frame::{FramePipeline, FrameStageRx, FrameStageTx},
   idle::{IdleState, IdleTimeoutRx},
   kinect::KinectHandler,
@@ -39,14 +42,17 @@ pub struct Handler {
   led_rx: led::EventRx,
   client_man_rx: client::ClientReqRx,
   kinect_rx: crate::kinect::EventRx,
+  cec: CecController,
+  cec_rx: cec::EventRx,
 
   idle_state: IdleState,
   idle_timeout_rx: IdleTimeoutRx,
 
   clients: ClientSessions,
   manual_flag: Arc<AtomicBool>,
-  pending_fade_in: bool,
   manual_started_while_idle: bool,
+  tv_powered: Option<bool>,
+  tv_forced_dark: bool,
 
   frame_pipeline: FramePipeline,
   frame_stage_tx: FrameStageTx,
@@ -72,6 +78,8 @@ impl Handler {
     client_man_rx: client::ClientReqRx,
     kinect_tx: crate::kinect::CommandTx,
     kinect_rx: crate::kinect::EventRx,
+    cec_tx: cec::CommandTx,
+    cec_rx: cec::EventRx,
 
     loop_signal: calloop::LoopSignal,
     cancel_token: tokio_util::sync::CancellationToken,
@@ -79,7 +87,9 @@ impl Handler {
     let (frame_stage_tx, frame_stage_rx) = frame::channel();
     let (idle_timeout_tx, idle_timeout_rx) = idle::channel();
 
-    Self {
+    let cec = CecController::new(cec_tx);
+
+    let handler = Self {
       compute,
 
       wayland_tx,
@@ -87,14 +97,17 @@ impl Handler {
       led_rx,
       client_man_rx,
       kinect_rx,
+      cec,
+      cec_rx,
 
       idle_state: IdleState::new(idle_timeout_tx, cancel_token.clone()),
       idle_timeout_rx,
 
       clients: ClientSessions::new(),
       manual_flag: Arc::new(AtomicBool::new(false)),
-      pending_fade_in: false,
       manual_started_while_idle: false,
+      tv_powered: None,
+      tv_forced_dark: false,
 
       frame_pipeline: FramePipeline::new(),
       frame_stage_tx,
@@ -105,7 +118,10 @@ impl Handler {
 
       loop_signal,
       cancel_token,
-    }
+    };
+
+    handler.cec.request_status();
+    handler
   }
 
   pub fn spawn(mut self) -> JoinHandle<()> {
@@ -125,7 +141,12 @@ impl Handler {
           self.handle_led_event(event);
         }
         Some(event) = self.kinect_rx.recv() => {
+          tracing::trace!("received event from Kinect manager: {:?}", event);
           self.kinect.handle_event(event, self.clients.iter(), &self.messenger);
+        }
+        Some(event) = self.cec_rx.recv() => {
+          tracing::trace!("received event from CEC manager: {:?}", event);
+          self.handle_cec_event(event);
         }
         Some(req) = self.client_man_rx.recv() => {
           tracing::trace!("received command from client: {:?}", req);
@@ -153,6 +174,55 @@ impl Handler {
     self.compute.wait_for_idle();
 
     tracing::debug!("scheduled event loops for shutdown");
+  }
+
+  fn handle_cec_event(&mut self, event: CecEvent) {
+    if let Some(status) = self.cec.handle_event(event, self.clients.iter(), &self.messenger) {
+      self.on_cec_status(status);
+    }
+  }
+
+  fn on_cec_status(&mut self, status: CecStatus) {
+    let previous = self.tv_powered.replace(status.powered_on);
+    if previous == Some(status.powered_on) {
+      return;
+    }
+
+    if status.powered_on {
+      self.on_tv_power_restored();
+    } else {
+      self.on_tv_power_lost();
+    }
+  }
+
+  fn on_tv_power_lost(&mut self) {
+    if self.tv_forced_dark {
+      return;
+    }
+
+    tracing::info!("TV powered off detected; fading LEDs");
+    self.tv_forced_dark = true;
+    self
+      .messenger
+      .send_led_command(LedCommand::FadeOut { duration_ms: None });
+  }
+
+  fn on_tv_power_restored(&mut self) {
+    if !self.tv_forced_dark {
+      return;
+    }
+
+    tracing::info!("TV powered on detected; resuming LEDs");
+    self.tv_forced_dark = false;
+
+    if self.clients.manual_enabled() || self.idle_state.effective_idle() {
+      return;
+    }
+
+    if !self.idle_state.effective_idle() {
+      self.start_fade_in_from_last_frame();
+    }
+    self.resume_frame_pipeline();
   }
 
   fn handle_wayland_event(&mut self, event: wayland::Event) {
@@ -192,15 +262,16 @@ impl Handler {
       return;
     }
 
+    if self.tv_forced_dark {
+      tracing::debug!("skipping frame processing because TV reported off");
+      return;
+    }
+
     tracing::debug!("wayland frame is ready for processing");
-    let pending_fade = self.pending_fade_in;
     let frame_id = self.frame_pipeline.next_frame_id();
 
     match self.compute.dispatch() {
       Ok(compute_rx) => {
-        if pending_fade {
-          self.pending_fade_in = false;
-        }
         self.frame_pipeline.record_start(frame_id);
 
         let wayland_tx = self.wayland_tx.clone();
@@ -217,7 +288,6 @@ impl Handler {
             frame_stage_tx,
             idle,
             manual_flag,
-            pending_fade,
           )
           .await;
         });
@@ -293,6 +363,9 @@ impl Handler {
       }
       MessageToServerData::Kinect(command) => {
         self.kinect.handle_command(addr, msg.id, command, &self.messenger);
+      }
+      MessageToServerData::Cec(command) => {
+        self.cec.handle_client_command(addr, msg.id, command, &self.messenger);
       }
     }
   }
@@ -380,6 +453,7 @@ impl Handler {
 
   fn on_enter_idle(&mut self) {
     tracing::debug!("effective idle detected; pausing frame pipeline");
+    self.cec.power_off();
     if self.clients.manual_enabled() {
       tracing::trace!("manual mode active; suppressing idle fade out");
     } else {
@@ -391,16 +465,18 @@ impl Handler {
   }
 
   fn on_exit_idle(&mut self) {
+    if self.cec.powered_on() != Some(true) {
+      self.cec.power_on();
+    }
+
     if self.clients.manual_enabled() {
       self.manual_started_while_idle = false;
     } else {
-      self.pending_fade_in = true;
+      self.start_fade_in_from_last_frame();
     }
 
     tracing::debug!("effective idle cleared; restarting frame loop");
-    if let Err(err) = self.wayland_tx.send(wayland::Command::ComputeDone) {
-      tracing::error!("failed to restart frame loop: {err}");
-    }
+    self.resume_frame_pipeline();
   }
 
   // --- Manual Mode ---
@@ -411,13 +487,11 @@ impl Handler {
 
     if enabled {
       tracing::debug!("manual mode enabled; pausing automatic frame dispatch");
-      self.pending_fade_in = false;
       self.manual_started_while_idle = idle;
       return;
     }
 
     if idle {
-      self.pending_fade_in = true;
       if self.manual_started_while_idle {
         tracing::debug!("manual mode disabled while idle; fading out without restoring frame");
         self
@@ -434,7 +508,6 @@ impl Handler {
       }
     } else {
       tracing::debug!("manual mode disabled; resuming automatic frame dispatch");
-      self.pending_fade_in = false;
       self
         .messenger
         .send_led_command(LedCommand::SetStripState(self.frame_pipeline.last_auto_frame));
@@ -442,6 +515,13 @@ impl Handler {
     }
 
     self.manual_started_while_idle = false;
+  }
+
+  fn start_fade_in_from_last_frame(&mut self) {
+    self.messenger.send_led_command(LedCommand::FadeIn {
+      state: self.frame_pipeline.last_auto_frame,
+      duration_ms: None,
+    });
   }
 
   fn resume_frame_pipeline(&self) {

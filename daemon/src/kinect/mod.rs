@@ -185,6 +185,13 @@ impl KinectManager {
   }
 
   fn try_connect_device(&mut self) {
+    if !Self::kinect_present() {
+      tracing::debug!("skipping Kinect init; no device currently connected");
+      self.status = "not connected".to_string();
+      self.publish_status();
+      return;
+    }
+
     match FreenectDevice::new(0) {
       Ok(device) => {
         tracing::info!("Kinect device connected successfully");
@@ -202,6 +209,43 @@ impl KinectManager {
         self.publish_status();
       }
     }
+  }
+
+  fn kinect_present() -> bool {
+    let mut enumerator = match udev::Enumerator::new() {
+      Ok(enumerator) => enumerator,
+      Err(err) => {
+        tracing::warn!("failed to create udev enumerator: {err}");
+        return true;
+      }
+    };
+
+    if let Err(err) = enumerator.match_subsystem("usb") {
+      tracing::warn!("failed to set udev enumerator filter: {err}");
+      return true;
+    }
+
+    let devices = match enumerator.scan_devices() {
+      Ok(devices) => devices,
+      Err(err) => {
+        tracing::warn!("failed to scan udev devices: {err}");
+        return true;
+      }
+    };
+
+    devices.into_iter().any(|device| {
+      let vendor = device.property_value("ID_VENDOR_ID");
+      let product = device.property_value("ID_MODEL_ID");
+
+      match (vendor, product) {
+        (Some(v), Some(p)) => {
+          let v_str = v.to_string_lossy();
+          let p_str = p.to_string_lossy();
+          v_str == KINECT_VENDOR_ID && KINECT_PRODUCT_IDS.contains(&p_str.as_ref())
+        }
+        _ => false,
+      }
+    })
   }
 
   async fn handle_command(&mut self, command: KinectCommand) {

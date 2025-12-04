@@ -57,7 +57,16 @@ unsafe impl Sync for Kinect {}
 impl Kinect {
   pub fn new(index: i32) -> Result<Self, KinectError> {
     let mut freenect = Freenect::Freenect::new().within_unique_ptr();
-    let device_ref = freenect.pin_mut().createSimpleDevice(c_int(index));
+    let requested_index = c_int(index);
+
+    {
+      let available = freenect.pin_mut().deviceCount().0;
+      if available <= index {
+        return Err(KinectError::NotFound);
+      }
+    }
+
+    let device_ref = freenect.pin_mut().createSimpleDevice(requested_index);
 
     let device_ptr = unsafe {
       let mut_ref = device_ref.get_unchecked_mut();
@@ -197,8 +206,6 @@ extern "C" fn depth_callback(user_data: *mut c_void, data: *mut c_void, timestam
 
 #[derive(Debug, thiserror::Error)]
 pub enum KinectError {
-  #[error("failed to create freenect context")]
-  ContextCreation,
-  #[error("failed to open device at index {0}")]
-  DeviceOpen(i32),
+  #[error("no Kinect devices detected")]
+  NotFound,
 }

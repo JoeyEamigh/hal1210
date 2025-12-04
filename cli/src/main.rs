@@ -6,8 +6,8 @@ use std::{
 use color_eyre::{Result, eyre::WrapErr, eyre::eyre};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use daemoncomm::{
-  Color, KinectCommand, KinectEvent, KinectStatus, LedCommand, MessageToClient, MessageToClientData,
-  MessageToServerData, client::Hal1210Client,
+  CecCommand, CecEvent, CecStatus, Color, KinectCommand, KinectEvent, KinectStatus, LedCommand,
+  MessageToClient, MessageToClientData, MessageToServerData, client::Hal1210Client,
 };
 use ratatui::{
   DefaultTerminal, Frame,
@@ -50,6 +50,7 @@ pub struct App {
   incoming: mpsc::UnboundedReceiver<MessageToClient>,
   manual_state: ManualModeState,
   idle_inhibit_state: IdleInhibitState,
+  cec_status: Option<CecStatus>,
   selected_command: usize,
   color_input: ColorInput,
   idle_timeout_input: DurationInput,
@@ -77,6 +78,7 @@ impl App {
       incoming: incoming_rx,
       manual_state: ManualModeState::Unknown,
       idle_inhibit_state: IdleInhibitState::Unknown,
+      cec_status: None,
       selected_command: 0,
       color_input: ColorInput::new(),
       idle_timeout_input: DurationInput::new("Idle inhibit timeout", None),
@@ -135,6 +137,7 @@ impl App {
     let (status_label, status_style) = self.manual_state.label_and_style();
     let (idle_label, idle_style) = self.idle_inhibit_state.label_and_style();
     let idle_timeout = self.idle_timeout_input.formatted();
+    let (cec_label, cec_style) = self.cec_status_label();
     let lines = vec![
       Line::from(vec![
         Span::styled("Manual mode: ", Style::default().add_modifier(Modifier::BOLD)),
@@ -146,6 +149,10 @@ impl App {
         Span::raw(" · timeout: "),
         Span::styled(idle_timeout, Style::default().fg(TuiColor::Gray)),
       ]),
+      Line::from(vec![
+        Span::styled("TV status: ", Style::default().add_modifier(Modifier::BOLD)),
+        Span::styled(cec_label, cec_style),
+      ]),
       Line::from(format!("Pending requests: {}", self.pending.len())),
       Line::from("Press Enter to send · 'm' toggles manual mode · 'i' toggles idle inhibit · Esc/q exits"),
     ];
@@ -156,6 +163,32 @@ impl App {
         .wrap(Wrap { trim: true }),
       area,
     );
+  }
+
+  fn cec_status_label(&self) -> (String, Style) {
+    match &self.cec_status {
+      Some(status) => {
+        let mut label = if status.powered_on { "on" } else { "off" }.to_string();
+        if status.active_source {
+          label.push_str(" · focused");
+        } else {
+          label.push_str(" · other input");
+        }
+
+        let style = if status.powered_on {
+          if status.active_source {
+            Style::default().fg(TuiColor::Green)
+          } else {
+            Style::default().fg(TuiColor::Yellow)
+          }
+        } else {
+          Style::default().fg(TuiColor::Red)
+        };
+
+        (label, style)
+      }
+      None => ("unknown".to_string(), Style::default().fg(TuiColor::Yellow)),
+    }
   }
 
   fn render_body(&mut self, frame: &mut Frame, area: Rect) {
@@ -469,6 +502,23 @@ impl App {
       CommandKind::Led(LedCommandKind::SetStripState | LedCommandKind::FadeIn) => {
         self.push_error("Full strip uploads are not supported yet.");
       }
+      CommandKind::Cec(kind) => match kind {
+        CecCommandKind::RequestStatus => {
+          self.send_or_log("Get TV status", MessageToServerData::Cec(CecCommand::RequestStatus));
+        }
+        CecCommandKind::PowerOn => {
+          self.send_or_log("Power on TV", MessageToServerData::Cec(CecCommand::PowerOn));
+        }
+        CecCommandKind::PowerOff => {
+          self.send_or_log("Power off TV", MessageToServerData::Cec(CecCommand::PowerOff));
+        }
+        CecCommandKind::RequestActiveSource => {
+          self.send_or_log(
+            "Focus TV input",
+            MessageToServerData::Cec(CecCommand::RequestActiveSource),
+          );
+        }
+      },
     }
   }
 
@@ -588,6 +638,9 @@ impl App {
       MessageToClientData::Kinect(notification) => {
         self.handle_kinect_notification(notification);
       }
+      MessageToClientData::Cec(event) => {
+        self.handle_cec_notification(event);
+      }
     }
   }
 
@@ -595,6 +648,18 @@ impl App {
     match notification {
       KinectEvent::Status(status) => {
         self.push_log(format!("kinect status · {}", Self::format_kinect_status(&status)));
+      }
+    }
+  }
+
+  fn handle_cec_notification(&mut self, event: CecEvent) {
+    match event {
+      CecEvent::Status(status) => {
+        self.cec_status = Some(status.clone());
+        self.push_log(format!("tv status · {}", Self::format_cec_status(&status)));
+      }
+      CecEvent::Error { message } => {
+        self.push_error(format!("cec error: {message}"));
       }
     }
   }
@@ -615,6 +680,12 @@ impl App {
 
     parts.push(format!("status={}", status.status));
     parts.join(" · ")
+  }
+
+  fn format_cec_status(status: &CecStatus) -> String {
+    let power = if status.powered_on { "on" } else { "off" };
+    let focus = if status.active_source { "focused" } else { "other input" };
+    format!("power={power} · input={focus}")
   }
 
   fn push_log(&mut self, message: impl Into<String>) {
@@ -867,6 +938,7 @@ enum CommandKind {
   IdleInhibit(bool),
   Led(LedCommandKind),
   Kinect(KinectCommandKind),
+  Cec(CecCommandKind),
 }
 
 #[derive(Clone, Copy)]
@@ -888,6 +960,14 @@ enum DurationField {
 #[derive(Clone, Copy)]
 enum KinectCommandKind {
   RequestStatus,
+}
+
+#[derive(Clone, Copy)]
+enum CecCommandKind {
+  RequestStatus,
+  PowerOn,
+  PowerOff,
+  RequestActiveSource,
 }
 
 const COMMANDS: &[CommandDescriptor] = &[
@@ -980,6 +1060,34 @@ const COMMANDS: &[CommandDescriptor] = &[
     description: "Fade into a provided LED frame. Not yet supported in this UI.",
     kind: CommandKind::Led(LedCommandKind::FadeIn),
     supported: false,
+    duration: None,
+  },
+  CommandDescriptor {
+    label: "Get TV status",
+    description: "Query the daemon's cached TV/CEC state.",
+    kind: CommandKind::Cec(CecCommandKind::RequestStatus),
+    supported: true,
+    duration: None,
+  },
+  CommandDescriptor {
+    label: "Power on TV",
+    description: "Send a CEC power-on command to the display.",
+    kind: CommandKind::Cec(CecCommandKind::PowerOn),
+    supported: true,
+    duration: None,
+  },
+  CommandDescriptor {
+    label: "Power off TV",
+    description: "Send a CEC standby command to the display.",
+    kind: CommandKind::Cec(CecCommandKind::PowerOff),
+    supported: true,
+    duration: None,
+  },
+  CommandDescriptor {
+    label: "Focus TV input",
+    description: "Request the TV route video back to this HDMI input.",
+    kind: CommandKind::Cec(CecCommandKind::RequestActiveSource),
+    supported: true,
     duration: None,
   },
 ];

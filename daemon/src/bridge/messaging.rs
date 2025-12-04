@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use daemoncomm::{KinectEvent, KinectStatus, LedCommand, MessageToClient, MessageToClientData};
+use daemoncomm::{CecEvent, CecStatus, KinectEvent, KinectStatus, LedCommand, MessageToClient, MessageToClientData};
 use uuid::Uuid;
 
 use crate::{client, led};
@@ -33,6 +33,10 @@ impl Messenger {
 
   pub fn send_idle_inhibit_state(&self, addr: SocketAddr, id: Uuid, enabled: bool, timeout_ms: Option<u64>) {
     self.send_reply(addr, id, MessageToClientData::IdleInhibit { enabled, timeout_ms });
+  }
+
+  pub fn send_cec_status(&self, addr: SocketAddr, id: Uuid, status: CecStatus) {
+    self.send_reply(addr, id, MessageToClientData::Cec(CecEvent::Status(status)));
   }
 
   pub fn send_kinect_status(&self, addr: SocketAddr, id: Uuid, status: KinectStatus) {
