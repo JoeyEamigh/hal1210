@@ -8,6 +8,8 @@
 - `just check` – run all checks across all crates. this is the main command you should use when developing.
 - `cargo check` – run in a crate directory to verify type correctness without producing binaries.
 
+DO NOT RUN `cargo fmt`.
+
 YOU MUST RUN ALL CARGO COMMANDS IN THE CORRECT CRATE DIRECTORY OTHERWISE THE TOOLCHAINS WILL NOT BE FOUND.
 
 ## Coding Style & Naming Conventions

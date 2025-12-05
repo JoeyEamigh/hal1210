@@ -16,7 +16,7 @@ mod __test__;
 #[tokio::main]
 async fn main() {
   monitoring::init_logger();
-  tracing::info!("starting wayled");
+  tracing::info!("starting hal1210 daemon");
 
   let (wayland_cmd_tx, wayland_cmd_rx) = calloop::channel::channel();
   let (wayland_event_tx, wayland_event_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -77,7 +77,7 @@ async fn main() {
   let kinect_man_handle = kinect_man.spawn();
   let cec_man_handle = cec_man.spawn();
 
-  tracing::info!("starting main loop");
+  tracing::info!("starting wayland event loop");
   event_loop
     .run(std::time::Duration::from_secs(10), &mut wayland, |_| {})
     .expect("could not run event loop");

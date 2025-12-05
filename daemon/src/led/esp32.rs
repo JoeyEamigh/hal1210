@@ -1,7 +1,7 @@
 use std::{env, path::PathBuf, time::Duration};
 
 use daemoncomm::LedStripState;
-use ledcomm::{BYTES_PER_LED, NUM_LEDS, WRITE_FEEDBACK_LEN, parse_write_feedback};
+use ledcomm::{parse_write_feedback, BYTES_PER_LED, NUM_LEDS, WRITE_FEEDBACK_LEN};
 use tokio::io::{self, AsyncReadExt, AsyncWriteExt, ReadHalf, WriteHalf};
 use tokio_serial::{SerialPortBuilderExt, SerialPortType, SerialStream, UsbPortInfo};
 use tokio_util::sync::CancellationToken;

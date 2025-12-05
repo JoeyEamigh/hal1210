@@ -1,8 +1,13 @@
+use std::time::{Duration, Instant};
+
 use daemoncomm::{KinectCommand, KinectEvent, KinectStatus};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use self::freenect::Kinect as FreenectDevice;
+use self::{
+  freenect::{libfreenect, Kinect as FreenectDevice},
+  opencv::summarize_rgb_frame,
+};
 
 mod freenect;
 mod opencv;
@@ -14,6 +19,12 @@ pub type EventRx = tokio::sync::mpsc::UnboundedReceiver<KinectEvent>;
 
 const KINECT_VENDOR_ID: &str = "045e";
 const KINECT_PRODUCT_IDS: &[&str] = &["02ae", "02ad", "02b0"];
+
+const RGB_WIDTH: i32 = 1280;
+const RGB_HEIGHT: i32 = 1024;
+const RGB_MONITOR_INTERVAL: Duration = Duration::from_secs(2);
+const RGB_FORMAT: libfreenect::freenect_video_format = libfreenect::freenect_video_format::FREENECT_VIDEO_RGB;
+const RGB_RESOLUTION: libfreenect::freenect_resolution = libfreenect::freenect_resolution::FREENECT_RESOLUTION_HIGH;
 
 #[derive(Debug)]
 enum UdevEvent {
@@ -40,6 +51,8 @@ struct DeviceRuntime {
   device: FreenectDevice,
   depth_active: bool,
   rgb_active: bool,
+  rgb_task: Option<JoinHandle<()>>,
+  cancel: CancellationToken,
 }
 
 impl KinectManager {
@@ -195,12 +208,13 @@ impl KinectManager {
     match FreenectDevice::new(0) {
       Ok(device) => {
         tracing::info!("Kinect device connected successfully");
-        self.runtime = Some(DeviceRuntime {
-          device,
-          depth_active: false,
-          rgb_active: false,
-        });
-        self.status = "connected".to_string();
+        let mut runtime = DeviceRuntime::new(device, self.cancel.child_token());
+        if runtime.start_rgb_stream() {
+          self.status = format!("rgb streaming {RGB_WIDTH}x{RGB_HEIGHT}");
+        } else {
+          self.status = "connected (rgb unavailable)".to_string();
+        }
+        self.runtime = Some(runtime);
         self.publish_status();
       }
       Err(err) => {
@@ -280,6 +294,124 @@ impl KinectManager {
 
     if let Err(err) = self.tx.send(KinectEvent::Status(status)) {
       tracing::warn!("failed to publish Kinect status event: {err}");
+    }
+  }
+}
+
+impl DeviceRuntime {
+  fn new(device: FreenectDevice, cancel: CancellationToken) -> Self {
+    Self {
+      device,
+      depth_active: false,
+      rgb_active: false,
+      rgb_task: None,
+      cancel,
+    }
+  }
+
+  fn start_rgb_stream(&mut self) -> bool {
+    if self.rgb_active {
+      return true;
+    }
+
+    let Some(video_rx) = self.device.take_video_stream() else {
+      tracing::error!("RGB stream channel already claimed; cannot start video");
+      return false;
+    };
+
+    tracing::info!(width = RGB_WIDTH, height = RGB_HEIGHT, "starting Kinect RGB stream");
+    self.device.set_video_format(RGB_FORMAT, RGB_RESOLUTION);
+    self.device.start_video();
+
+    let processor_handle = Self::spawn_rgb_processor(video_rx, self.cancel.clone());
+    self.rgb_task = Some(processor_handle);
+    self.rgb_active = true;
+    true
+  }
+
+  fn spawn_rgb_processor(
+    mut video_rx: tokio::sync::mpsc::UnboundedReceiver<freenect::VideoFrame>,
+    cancel: CancellationToken,
+  ) -> JoinHandle<()> {
+    tokio::spawn(async move {
+      let mut total_frames: u64 = 0;
+      let mut window_frames: u64 = 0;
+      let mut last_report = Instant::now();
+      let mut latest_mean: Option<[f64; 3]> = None;
+
+      loop {
+        tokio::select! {
+          _ = cancel.cancelled() => {
+            tracing::debug!("RGB processor received cancellation signal");
+            break;
+          }
+          frame = video_rx.recv() => {
+            match frame {
+              Some(frame) => {
+                total_frames += 1;
+                window_frames += 1;
+
+                match tokio::task::spawn_blocking(move || summarize_rgb_frame(frame, RGB_WIDTH, RGB_HEIGHT)).await {
+                  Ok(Ok(summary)) => {
+                    latest_mean = Some(summary.mean_rgb);
+                  }
+                  Ok(Err(err)) => {
+                    tracing::warn!(?err, "failed to summarize RGB frame");
+                  }
+                  Err(err) => {
+                    tracing::warn!(?err, "RGB summary worker aborted");
+                  }
+                }
+              }
+              None => {
+                tracing::debug!("RGB video channel closed");
+                break;
+              }
+            }
+          }
+        }
+
+        let elapsed = last_report.elapsed();
+        if elapsed >= RGB_MONITOR_INTERVAL {
+          let fps = if elapsed.as_secs_f64() > 0.0 {
+            window_frames as f64 / elapsed.as_secs_f64()
+          } else {
+            0.0
+          };
+
+          if let Some(mean) = latest_mean.take() {
+            tracing::debug!(
+              fps,
+              mean_r = mean[0],
+              mean_g = mean[1],
+              mean_b = mean[2],
+              "kinect RGB stream active"
+            );
+          } else {
+            tracing::debug!(fps, "kinect RGB stream active");
+          }
+
+          window_frames = 0;
+          last_report = Instant::now();
+        }
+      }
+
+      tracing::info!(total_frames, "kinect RGB processor exiting");
+    })
+  }
+}
+
+impl Drop for DeviceRuntime {
+  fn drop(&mut self) {
+    self.cancel.cancel();
+    if let Some(handle) = self.rgb_task.take() {
+      handle.abort();
+    }
+
+    if self.rgb_active {
+      tracing::info!("stopping Kinect RGB stream");
+      self.device.stop_video();
+      self.rgb_active = false;
     }
   }
 }

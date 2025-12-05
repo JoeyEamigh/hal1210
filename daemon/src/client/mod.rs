@@ -2,7 +2,7 @@ use core::net::SocketAddr;
 use std::{collections::HashMap, io};
 
 use daemoncomm::{
-  MessageToClient, MessageToClientData, MessageToServer, SOCKET_ADDR, server::codec::Hal1210ServerCodec,
+  server::codec::Hal1210ServerCodec, MessageToClient, MessageToClientData, MessageToServer, SOCKET_ADDR,
 };
 
 use futures::{SinkExt, StreamExt};

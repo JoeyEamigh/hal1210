@@ -4,15 +4,15 @@ use std::{
   os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd},
   ptr,
   sync::{
-    Arc,
     atomic::{AtomicBool, Ordering},
+    Arc,
   },
   thread,
   time::Instant,
 };
 
 use self::shader::{DispatchScratch, ImageInfo, ShaderKind, ShaderResult, Shaders};
-use ash::{Device, Entry, Instance, vk};
+use ash::{vk, Device, Entry, Instance};
 use tokio::{sync::oneshot, task::spawn_blocking};
 
 use crate::wayland;

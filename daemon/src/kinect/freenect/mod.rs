@@ -1,4 +1,4 @@
-mod libfreenect {
+pub(crate) mod libfreenect {
   #![allow(unsafe_op_in_unsafe_fn)]
   #![allow(unused_imports)]
   use autocxx::prelude::*;
@@ -43,8 +43,8 @@ pub struct Kinect {
   device: *mut Freenect::FreenectDevice,
 
   // Channels
-  video_rx: mpsc::UnboundedReceiver<VideoFrame>,
-  depth_rx: mpsc::UnboundedReceiver<DepthFrame>,
+  video_rx: Option<mpsc::UnboundedReceiver<VideoFrame>>,
+  depth_rx: Option<mpsc::UnboundedReceiver<DepthFrame>>,
 
   // Pointers to callback data to drop them later
   video_cb_data: *mut c_void,
@@ -96,8 +96,8 @@ impl Kinect {
     Ok(Kinect {
       _freenect: freenect,
       device: device_ptr,
-      video_rx,
-      depth_rx,
+      video_rx: Some(video_rx),
+      depth_rx: Some(depth_rx),
       video_cb_data: video_data_ptr,
       depth_cb_data: depth_data_ptr,
     })
@@ -149,6 +149,14 @@ impl Kinect {
     unsafe {
       Pin::new_unchecked(&mut *self.device).setDepthFormat(fmt, res);
     }
+  }
+
+  pub fn take_video_stream(&mut self) -> Option<mpsc::UnboundedReceiver<VideoFrame>> {
+    self.video_rx.take()
+  }
+
+  pub fn take_depth_stream(&mut self) -> Option<mpsc::UnboundedReceiver<DepthFrame>> {
+    self.depth_rx.take()
   }
 }
 

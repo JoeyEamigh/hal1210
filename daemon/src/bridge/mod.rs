@@ -47,6 +47,7 @@ pub struct Handler {
 
   idle_state: IdleState,
   idle_timeout_rx: IdleTimeoutRx,
+  effective_idle_cached: bool,
 
   clients: ClientSessions,
   manual_flag: Arc<AtomicBool>,
@@ -102,6 +103,7 @@ impl Handler {
 
       idle_state: IdleState::new(idle_timeout_tx, cancel_token.clone()),
       idle_timeout_rx,
+      effective_idle_cached: false,
 
       clients: ClientSessions::new(),
       manual_flag: Arc::new(AtomicBool::new(false)),
@@ -434,7 +436,7 @@ impl Handler {
   }
 
   fn sync_effective_idle(&mut self) {
-    let was_idle = self.effective_idle_cached();
+    let was_idle = self.effective_idle_cached;
     let is_idle = self.idle_state.effective_idle();
 
     if is_idle && !was_idle {
@@ -444,11 +446,8 @@ impl Handler {
     } else if self.idle_state.seat_idle && self.idle_state.idle_inhibit {
       tracing::debug!("idle inhibit active; suppressing idle fade out");
     }
-  }
 
-  fn effective_idle_cached(&self) -> bool {
-    self.idle_state.seat_idle && !self.idle_state.idle_inhibit
-      || (!self.idle_state.seat_idle && self.idle_state.effective_idle())
+    self.effective_idle_cached = is_idle;
   }
 
   fn on_enter_idle(&mut self) {

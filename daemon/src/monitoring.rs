@@ -1,11 +1,11 @@
 pub fn init_logger() {
   use tracing::metadata::LevelFilter;
   use tracing_subscriber::{
-    EnvFilter, Layer,
     filter::Directive,
     fmt::{self, format::FmtSpan},
     prelude::__tracing_subscriber_SubscriberExt,
     util::SubscriberInitExt,
+    EnvFilter, Layer,
   };
 
   // directives for debug builds
@@ -42,7 +42,7 @@ pub fn init_logger() {
 pub async fn wait_for_signal() {
   use tokio::signal::{
     ctrl_c,
-    unix::{SignalKind, signal},
+    unix::{signal, SignalKind},
   };
 
   let mut signal_terminate = signal(SignalKind::terminate()).expect("could not create signal handler");

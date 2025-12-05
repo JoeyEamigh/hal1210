@@ -1,5 +1,5 @@
 use super::ComputeError;
-use ash::{Device, vk};
+use ash::{vk, Device};
 use shadercomm::{AverageBuffer, SIDE_LEDS, TOP_LEDS};
 
 pub mod border_colors;

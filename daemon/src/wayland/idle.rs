@@ -1,4 +1,4 @@
-use wayland_client::{Connection, Dispatch, QueueHandle, delegate_noop};
+use wayland_client::{delegate_noop, Connection, Dispatch, QueueHandle};
 use wayland_protocols::ext::idle_notify::v1::client::{
   ext_idle_notification_v1::{self, ExtIdleNotificationV1},
   ext_idle_notifier_v1::ExtIdleNotifierV1,

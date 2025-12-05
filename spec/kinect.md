@@ -25,7 +25,7 @@
 
 ## Near-Term Subplan
 
-1. **Stage 0 Foundations (current focus)**
+1. **Stage 0 Foundations**
   - Mirror `led::LedManager` patterns to define `kinect::{Command, Event, Manager}` plus typed channel aliases and reconnection-aware lifecycle methods.
   - Extend `daemon::main` and `bridge::Handler` with Kinect-aware channel stubs that gracefully handle missing hardware, surfacing `DeviceUnavailable` to clients.
   - Record distro prerequisites (`libfreenect-dev`, CUDA-enabled OpenCV) in docs/CI so contributors immediately see actionable errors.
