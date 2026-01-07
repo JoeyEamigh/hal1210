@@ -4,10 +4,14 @@ use std::{
     atomic::{AtomicBool, Ordering},
     Arc,
   },
+  time::{Duration, Instant},
 };
 
 use daemoncomm::{CecEvent, CecStatus, LedCommand, MessageToServer, MessageToServerData};
-use tokio::task::JoinHandle;
+use tokio::{
+  task::JoinHandle,
+  time::{self, MissedTickBehavior},
+};
 
 use crate::{
   cec,
@@ -34,6 +38,11 @@ use self::{
   messaging::Messenger,
 };
 
+const CEC_POWER_COMMAND_GRACE: Duration = Duration::from_secs(5);
+const CEC_POWER_FLAP_WINDOW: Duration = Duration::from_secs(3);
+const CEC_POWER_RETRY_INTERVAL: Duration = Duration::from_secs(5);
+const CEC_POWER_MAX_RETRIES: u8 = 12;
+
 pub struct Handler {
   compute: gpu::Compute,
 
@@ -54,6 +63,8 @@ pub struct Handler {
   manual_started_while_idle: bool,
   tv_powered: Option<bool>,
   tv_forced_dark: bool,
+  pending_power: Option<PendingPower>,
+  last_power_transition: Option<Instant>,
 
   frame_pipeline: FramePipeline,
   frame_stage_tx: FrameStageTx,
@@ -110,6 +121,8 @@ impl Handler {
       manual_started_while_idle: false,
       tv_powered: None,
       tv_forced_dark: false,
+      pending_power: None,
+      last_power_transition: None,
 
       frame_pipeline: FramePipeline::new(),
       frame_stage_tx,
@@ -122,6 +135,9 @@ impl Handler {
       cancel_token,
     };
 
+    tracing::debug!("issuing startup CEC power_on");
+    handler.issue_power_command(true);
+
     handler.cec.request_status();
     handler
   }
@@ -131,6 +147,9 @@ impl Handler {
   }
 
   async fn run(&mut self) {
+    let mut power_retry = time::interval(CEC_POWER_RETRY_INTERVAL);
+    power_retry.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
     loop {
       tokio::select! {
         biased;
@@ -163,6 +182,9 @@ impl Handler {
           self.idle_state.on_timeout();
           self.sync_effective_idle();
         }
+        _ = power_retry.tick() => {
+          self.tick_power_retry();
+        }
         _ = monitoring::wait_for_signal() => {
           tracing::info!("shutdown signal received, stopping...");
           break;
@@ -185,10 +207,16 @@ impl Handler {
   }
 
   fn on_cec_status(&mut self, status: CecStatus) {
+    if !self.accept_power_status(status.powered_on) {
+      return;
+    }
+
     let previous = self.tv_powered.replace(status.powered_on);
     if previous == Some(status.powered_on) {
       return;
     }
+
+    self.last_power_transition = Some(Instant::now());
 
     if status.powered_on {
       self.on_tv_power_restored();
@@ -452,7 +480,7 @@ impl Handler {
 
   fn on_enter_idle(&mut self) {
     tracing::debug!("effective idle detected; pausing frame pipeline");
-    self.cec.power_off();
+    self.request_power_state(false);
     if self.clients.manual_enabled() {
       tracing::trace!("manual mode active; suppressing idle fade out");
     } else {
@@ -464,9 +492,7 @@ impl Handler {
   }
 
   fn on_exit_idle(&mut self) {
-    if self.cec.powered_on() != Some(true) {
-      self.cec.power_on();
-    }
+    self.request_power_state(true);
 
     if self.clients.manual_enabled() {
       self.manual_started_while_idle = false;
@@ -527,5 +553,145 @@ impl Handler {
     if let Err(err) = self.wayland_tx.send(wayland::Command::ComputeDone) {
       tracing::error!("failed to resume frame pipeline: {err}");
     }
+  }
+
+  fn request_power_state(&mut self, target_on: bool) {
+    if self.tv_powered == Some(target_on) {
+      self.pending_power = None;
+      return;
+    }
+
+    let retry_existing = if let Some(pending) = self.pending_power.as_ref()
+      && pending.target_on == target_on
+    {
+      if pending.elapsed_since_last() < CEC_POWER_RETRY_INTERVAL {
+        return;
+      }
+      true
+    } else {
+      false
+    };
+
+    if retry_existing {
+      self.issue_power_command(target_on);
+      if let Some(pending) = self.pending_power.as_mut() {
+        pending.mark_retry();
+      }
+      return;
+    }
+
+    self.pending_power = Some(PendingPower::new(target_on));
+    self.issue_power_command(target_on);
+  }
+
+  fn accept_power_status(&mut self, powered_on: bool) -> bool {
+    if let Some(pending) = self.pending_power {
+      if powered_on == pending.target_on {
+        self.pending_power = None;
+      } else if pending.elapsed_since_last() < CEC_POWER_COMMAND_GRACE {
+        tracing::debug!(
+          target = pending.target_on,
+          reported = powered_on,
+          "ignoring delayed CEC power status"
+        );
+        return false;
+      } else {
+        tracing::warn!(
+          target = pending.target_on,
+          reported = powered_on,
+          elapsed_ms = pending.elapsed_since_last().as_millis(),
+          "CEC power command did not settle within grace window"
+        );
+        self.pending_power = None;
+      }
+    }
+
+    if let Some(last_change) = self.last_power_transition
+      && Some(powered_on) != self.tv_powered
+      && last_change.elapsed() < CEC_POWER_FLAP_WINDOW
+    {
+      tracing::debug!(
+        reported = powered_on,
+        elapsed_ms = last_change.elapsed().as_millis(),
+        "ignoring flapping CEC status"
+      );
+      return false;
+    }
+
+    true
+  }
+
+  fn tick_power_retry(&mut self) {
+    let Some(pending) = self.pending_power else {
+      return;
+    };
+
+    if self.tv_powered == Some(pending.target_on) {
+      self.pending_power = None;
+      return;
+    }
+
+    if pending.attempts >= CEC_POWER_MAX_RETRIES {
+      tracing::warn!(
+        target = pending.target_on,
+        attempts = pending.attempts,
+        elapsed_ms = pending.elapsed_total().as_millis(),
+        "CEC power command exceeded retry budget"
+      );
+      self.pending_power = None;
+      return;
+    }
+
+    if pending.elapsed_since_last() < CEC_POWER_RETRY_INTERVAL {
+      return;
+    }
+
+    let attempt = pending.attempts + 1;
+    tracing::info!(target = pending.target_on, attempt, "retrying CEC power command");
+    self.issue_power_command(pending.target_on);
+    if let Some(pending_mut) = self.pending_power.as_mut() {
+      pending_mut.mark_retry();
+    }
+  }
+
+  fn issue_power_command(&self, target_on: bool) {
+    if target_on {
+      self.cec.power_on();
+    } else {
+      self.cec.power_off();
+    }
+  }
+}
+
+#[derive(Clone, Copy)]
+struct PendingPower {
+  target_on: bool,
+  attempts: u8,
+  first_requested: Instant,
+  last_attempt: Instant,
+}
+
+impl PendingPower {
+  fn new(target_on: bool) -> Self {
+    let now = Instant::now();
+    Self {
+      target_on,
+      attempts: 1,
+      first_requested: now,
+      last_attempt: now,
+    }
+  }
+
+  fn mark_retry(&mut self) {
+    self.attempts = self.attempts.saturating_add(1);
+    self.last_attempt = Instant::now();
+  }
+
+  fn elapsed_since_last(&self) -> Duration {
+    self.last_attempt.elapsed()
+  }
+
+  fn elapsed_total(&self) -> Duration {
+    self.first_requested.elapsed()
   }
 }

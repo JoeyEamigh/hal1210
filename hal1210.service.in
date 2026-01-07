@@ -12,7 +12,7 @@ Restart=on-failure
 RestartSec=5
 
 Environment=WAYLAND_DISPLAY=wayland-1
-Environment=RUST_LOG=hal1210=info
+Environment=RUST_LOG=hal1210=info,hal1210::cec=trace,hal1210::kinect=trace,hal1210::bridge::cec_control=debug
 
 [Install]
 WantedBy=graphical-session.target

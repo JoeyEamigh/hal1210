@@ -73,10 +73,6 @@ impl CecController {
     }
   }
 
-  pub fn powered_on(&self) -> Option<bool> {
-    self.last_status.as_ref().map(|status| status.powered_on)
-  }
-
   pub fn request_status(&self) {
     let _ = self.send(CecCommand::RequestStatus);
   }

@@ -18,7 +18,10 @@ const LOGICAL_ADDRESS: CecLogicalAddress = CecLogicalAddress::Playbackdevice1;
 const TV_LOGICAL_ADDRESS: CecLogicalAddress = CecLogicalAddress::Tv;
 const COMMAND_RETRY_COUNT: usize = 10;
 const COMMAND_RETRY_DELAY_MS: u64 = 500;
-const STATUS_POLL_INTERVAL_MS: u64 = 1000;
+const STATUS_POLL_INTERVAL_MS: u64 = 1_000;
+const POWER_ON_ACTIVE_SOURCE_DELAY_MS: u64 = 1_500;
+const POWER_ON_VERIFY_ATTEMPTS: usize = 10;
+const POWER_ON_VERIFY_INTERVAL_MS: u64 = 1_000;
 const REQUEST_ACTIVE_SOURCE_ON_POWER: bool = true;
 
 pub struct CecManager {
@@ -79,31 +82,137 @@ impl CecManager {
   async fn handle_command(&mut self, command: ClientCecCommand) {
     match command {
       ClientCecCommand::PowerOn => {
-        if self.power_on().await {
-          if REQUEST_ACTIVE_SOURCE_ON_POWER {
-            let _ = self.request_active_source().await;
-          }
-          self.refresh_status().await;
-        }
+        tracing::debug!("received CEC power_on request");
+        let _ = self.power_on().await;
       }
       ClientCecCommand::PowerOff => {
+        tracing::debug!("received CEC power_off request");
         if self.power_off().await {
-          self.refresh_status().await;
+          let status = if let Some(runtime) = self.runtime.as_mut() {
+            runtime.state = CecSnapshot::powered_off();
+            Some(runtime.state)
+          } else {
+            None
+          };
+
+          if let Some(status) = status {
+            self.publish_status(status.into());
+          }
         }
       }
       ClientCecCommand::RequestActiveSource => {
+        tracing::trace!("received CEC request_active_source");
         if self.request_active_source().await {
           self.refresh_status().await;
         }
       }
       ClientCecCommand::RequestStatus => {
+        tracing::trace!("received CEC request_status");
         self.refresh_status().await;
       }
     }
   }
 
   async fn power_on(&mut self) -> bool {
-    self.send_with_retry("power_on", |runtime| runtime.power_on()).await
+    // for attempt in 1..=COMMAND_RETRY_COUNT {
+    //   if !self.ensure_connection().await {
+    //     time::sleep(Duration::from_millis(COMMAND_RETRY_DELAY_MS)).await;
+    //     continue;
+    //   }
+
+    //   tracing::trace!(attempt, "issuing CEC power_on");
+
+    //   let status = match self.runtime.as_mut() {
+    //     None => None,
+    //     Some(runtime) => {
+    //       if let Err(err) = runtime.power_on() {
+    //         tracing::warn!(attempt, "CEC power_on failed: {err}");
+    //         None
+    //       } else {
+    //         time::sleep(Duration::from_millis(POWER_ON_ACTIVE_SOURCE_DELAY_MS)).await;
+
+    //         if REQUEST_ACTIVE_SOURCE_ON_POWER {
+    //           let _ = runtime.set_active_source();
+    //         }
+
+    //         if Self::verify_power_on(runtime).await {
+    //           tracing::debug!(attempt, "CEC power_on verified");
+    //           Some(runtime.state)
+    //         } else {
+    //           tracing::debug!(attempt, "CEC power_on verification failed; will retry");
+    //           None
+    //         }
+    //       }
+    //     }
+    //   };
+
+    //   if let Some(status) = status {
+    //     self.publish_status(status.into());
+    //     return true;
+    //   }
+
+    //   tracing::trace!(attempt, "dropping CEC runtime after failed power_on path");
+    //   self.runtime = None;
+    //   time::sleep(Duration::from_millis(COMMAND_RETRY_DELAY_MS)).await;
+    // }
+
+    // self.publish_error(format!(
+    //   "cec command power_on failed after {COMMAND_RETRY_COUNT} attempts"
+    // ));
+    // false
+
+    for attempt in 1..=COMMAND_RETRY_COUNT {
+      if !self.ensure_connection().await {
+        time::sleep(Duration::from_millis(COMMAND_RETRY_DELAY_MS)).await;
+        continue;
+      }
+
+      tracing::trace!(
+        attempt,
+        "issuing CEC power_on via power_off->set_active_source workaround for Samsung TVs"
+      );
+
+      let status = match self.runtime.as_mut() {
+        None => None,
+        Some(runtime) => {
+          if let Err(err) = runtime.power_off() {
+            tracing::warn!(attempt, "CEC power_off (workaround) failed: {err}");
+            None
+          } else {
+            time::sleep(Duration::from_millis(POWER_ON_ACTIVE_SOURCE_DELAY_MS)).await;
+
+            if let Err(err) = runtime.set_active_source() {
+              tracing::warn!(attempt, "CEC set_active_source (workaround) failed: {err}");
+              None
+            } else {
+              time::sleep(Duration::from_millis(POWER_ON_ACTIVE_SOURCE_DELAY_MS)).await;
+
+              if Self::verify_power_on(runtime).await {
+                tracing::debug!(attempt, "CEC power_on workaround verified");
+                Some(runtime.state)
+              } else {
+                tracing::debug!(attempt, "CEC power_on workaround verification failed; will retry");
+                None
+              }
+            }
+          }
+        }
+      };
+
+      if let Some(status) = status {
+        self.publish_status(status.into());
+        return true;
+      }
+
+      tracing::trace!(attempt, "dropping CEC runtime after failed power_on workaround");
+      self.runtime = None;
+      time::sleep(Duration::from_millis(COMMAND_RETRY_DELAY_MS)).await;
+    }
+
+    self.publish_error(format!(
+      "cec command power_on failed after {COMMAND_RETRY_COUNT} attempts"
+    ));
+    false
   }
 
   async fn power_off(&mut self) -> bool {
@@ -121,10 +230,24 @@ impl CecManager {
       return;
     }
 
-    if let Some(runtime) = self.runtime.as_mut() {
-      let snapshot = runtime.refresh_state().unwrap_or(runtime.state);
-      self.publish_status(snapshot.into());
-    }
+    let status = match self.runtime.as_mut() {
+      Some(runtime) => {
+        if runtime.state.powered_on {
+          runtime.refresh_state().unwrap_or(runtime.state)
+        } else {
+          tracing::trace!("skipping CEC refresh_state because TV is off/unknown");
+          runtime.state
+        }
+      }
+      None => return,
+    };
+
+    tracing::trace!(
+      powered_on = status.powered_on,
+      active_source = status.active_source,
+      "publishing refreshed CEC status"
+    );
+    self.publish_status(status.into());
   }
 
   async fn poll_status(&mut self) {
@@ -132,9 +255,17 @@ impl CecManager {
       return;
     }
 
-    if let Some(runtime) = self.runtime.as_mut()
-      && let Some(snapshot) = runtime.refresh_state()
-    {
+    let status = match self.runtime.as_mut() {
+      Some(runtime) if runtime.state.powered_on => runtime.refresh_state(),
+      _ => None,
+    };
+
+    if let Some(snapshot) = status {
+      tracing::trace!(
+        powered_on = snapshot.powered_on,
+        active_source = snapshot.active_source,
+        "publishing polled CEC status change"
+      );
       self.publish_status(snapshot.into());
     }
   }
@@ -147,8 +278,9 @@ impl CecManager {
     match CecRuntime::connect().await {
       Ok(runtime) => {
         let status = runtime.state.into();
-        self.publish_status(status);
         self.runtime = Some(runtime);
+        tracing::debug!("connected CEC runtime; publishing initial status");
+        self.publish_status(status);
         true
       }
       Err(err) => {
@@ -168,6 +300,8 @@ impl CecManager {
         time::sleep(Duration::from_millis(COMMAND_RETRY_DELAY_MS)).await;
         continue;
       }
+
+      tracing::trace!(label, attempt, "issuing CEC command with retry");
 
       let success = {
         let runtime = self.runtime.as_ref().expect("runtime available");
@@ -193,7 +327,46 @@ impl CecManager {
     false
   }
 
+  async fn verify_power_on(runtime: &mut CecRuntime) -> bool {
+    for attempt in 0..POWER_ON_VERIFY_ATTEMPTS {
+      tracing::trace!(attempt, "verifying CEC power_on state");
+      time::sleep(Duration::from_millis(POWER_ON_VERIFY_INTERVAL_MS)).await;
+
+      let snapshot = runtime.refresh_state().unwrap_or(runtime.state);
+      if snapshot.powered_on {
+        if REQUEST_ACTIVE_SOURCE_ON_POWER {
+          let _ = runtime.set_active_source();
+          let _ = runtime.refresh_state();
+        }
+        tracing::trace!(
+          attempt,
+          powered_on = snapshot.powered_on,
+          active_source = snapshot.active_source,
+          "CEC power_on verified by snapshot"
+        );
+        return true;
+      }
+
+      if let Err(err) = runtime.power_on() {
+        tracing::warn!("power_on verification resend failed: {err}");
+        break;
+      }
+
+      if REQUEST_ACTIVE_SOURCE_ON_POWER {
+        let _ = runtime.set_active_source();
+      }
+    }
+
+    tracing::debug!("CEC power_on verification exhausted attempts");
+    false
+  }
+
   fn publish_status(&self, status: ClientCecStatus) {
+    tracing::trace!(
+      powered_on = status.powered_on,
+      active_source = status.active_source,
+      "forwarding CEC status event"
+    );
     if let Err(err) = self.tx.send(ClientCecEvent::Status(status)) {
       tracing::debug!("failed to forward CEC status event: {err}");
     }
@@ -235,6 +408,7 @@ impl CecRuntime {
       .map_err(|err| CecInitError::Config(err.to_string()))?;
 
     let connection = cfg.open().map_err(CecInitError::Connection)?;
+    // let state = CecSnapshot::powered_off();
     let state = CecSnapshot::query(&connection);
     Ok(Self { connection, state })
   }
@@ -304,12 +478,16 @@ struct CecSnapshot {
 }
 
 impl CecSnapshot {
+  fn powered_off() -> Self {
+    Self {
+      powered_on: false,
+      active_source: false,
+    }
+  }
+
   fn query(connection: &CecConnection) -> Self {
     let power_status = connection.get_device_power_status(TV_LOGICAL_ADDRESS);
-    let powered_on = matches!(
-      power_status,
-      CecPowerStatus::On | CecPowerStatus::InTransitionStandbyToOn
-    );
+    let powered_on = matches!(power_status, CecPowerStatus::On);
 
     let active_source = connection.is_active_source(LOGICAL_ADDRESS);
 
