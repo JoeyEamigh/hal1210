@@ -20,3 +20,4 @@ YOU MUST RUN ALL CARGO COMMANDS IN THE CORRECT CRATE DIRECTORY OTHERWISE THE TOO
 
 ## Important Tips
 Your search tools are not capable of searching in gitignored files. If you need to search in such files, use a terminal command like `rg`.
+Place plans in `./spec/`. Reference existing plans when needed.
